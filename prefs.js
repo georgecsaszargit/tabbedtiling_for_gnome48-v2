@@ -17,6 +17,7 @@ const log = (msg) => console.log(`[TabbedTilingPrefs] ${msg}`);
 
 const CONFIG_DIR = GLib.build_filenamev([GLib.get_home_dir(), '.config', 'tabbedtiling']);
 const CONFIG_PATH = GLib.build_filenamev([CONFIG_DIR, 'config.json']);
+const PREVIEW_PATH = GLib.build_filenamev([CONFIG_DIR, 'preview.json']);
 
 function ensureConfigDir() {
     try {
@@ -204,6 +205,26 @@ class ZoneEditorRow extends Adw.ExpanderRow {
 // ---------- Preferences Window ----------
 
 export default class TabbedTilingPrefs extends ExtensionPreferences {
+    _createSpinRow(parentGroup, title, initialValue, min, max, step) {
+        const row = new Adw.ActionRow({ title });
+        const adj = new Gtk.Adjustment({
+            lower: min,
+            upper: max,
+            step_increment: step,
+            page_increment: step * 10,
+            value: initialValue,
+        });
+        const spin = new Gtk.SpinButton({
+            halign: Gtk.Align.END,
+            adjustment: adj,
+            climb_rate: 1,
+            digits: 0,
+        });
+        row.add_suffix(spin);
+        row.activatable_widget = spin;
+        parentGroup.add(row);
+        return spin;
+    }
     fillPreferencesWindow(window) {
         // Make sure Adw preferences styling is initialized
         Adw.init();
@@ -212,6 +233,25 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
 
         const page = new Adw.PreferencesPage();
         window.add(page);
+
+        // Zone Generator Group
+        const generatorGroup = new Adw.PreferencesGroup({
+            title: _('Zone Generator'),
+            description: _('Quickly create a set of horizontal zones for a monitor. This will replace existing zones on the selected monitor.'),
+        });
+        page.add(generatorGroup);
+
+        const monSpin = this._createSpinRow(generatorGroup, _('Monitor Index'), 0, 0, 16, 1);
+        const resWSpin = this._createSpinRow(generatorGroup, _('Monitor Resolution Width'), 1920, 0, 10000, 1);
+        const resHSpin = this._createSpinRow(generatorGroup, _('Monitor Resolution Height'), 1080, 0, 10000, 1);
+        const xSpin = this._createSpinRow(generatorGroup, _('Start X Coordinate'), 0, 0, 10000, 1);
+        const ySpin = this._createSpinRow(generatorGroup, _('Start Y Coordinate'), 0, 0, 10000, 1);
+        const numZonesSpin = this._createSpinRow(generatorGroup, _('Number of Zones'), 2, 1, 16, 1);
+
+        const genRow = new Adw.ActionRow();
+        const genBtn = new Gtk.Button({ label: _('Generate Zones'), halign: Gtk.Align.CENTER });
+        genRow.set_child(genBtn);
+        generatorGroup.add(genRow);        
 
         // Zones group
         const zonesGroup = new Adw.PreferencesGroup({ title: _('Zones'), description: _('Define rectangles for snapping and tabbing.') });
@@ -231,6 +271,43 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             this._addZoneRow(z, zonesGroup);
         }
 
+        genBtn.connect('clicked', () => {
+            const monitorIndex = monSpin.get_value_as_int();
+            const resW = resWSpin.get_value_as_int();
+            const resH = resHSpin.get_value_as_int();
+            const startX = xSpin.get_value_as_int();
+            const startY = ySpin.get_value_as_int();
+            const numZones = numZonesSpin.get_value_as_int();
+
+            // Remove existing zones for this monitor
+            const rowsToRemove = this._zoneRows.filter(r => r.getZone().monitorIndex === monitorIndex);
+            rowsToRemove.forEach(r => {
+                zonesGroup.remove(r);
+                const index = this._zoneRows.indexOf(r);
+                if (index > -1) this._zoneRows.splice(index, 1);
+            });
+
+            // Calculate and add new zones
+            const availableWidth = resW - startX;
+            const zoneWidth = Math.floor(availableWidth / numZones);
+            const zoneHeight = resH - startY;
+
+            if (zoneWidth <= 0 || zoneHeight <= 0) {
+                this._toast(window, _('Invalid dimensions. Check resolution and start coordinates.'));
+                return;
+            }
+
+            for (let i = 0; i < numZones; i++) {
+                const zoneData = {
+                    name: `Monitor ${monitorIndex} Zone ${i + 1}`,
+                    monitorIndex, x: startX + (i * zoneWidth), y: startY,
+                    width: zoneWidth, height: zoneHeight, gap: 8, isPrimary: (i === 0),
+                };
+                this._addZoneRow(zoneData, zonesGroup);
+            }
+            this._toast(window, _(`Generated ${numZones} zones for monitor ${monitorIndex}.`));
+        });
+
         // TabBar settings (minimal; keep your full set if you want)
         const tabBarGroup = new Adw.PreferencesGroup({ title: _('Tab Bar'), description: _('Basic appearance options') });
         page.add(tabBarGroup);
@@ -243,7 +320,26 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         tabBarGroup.add(heightRow);
 
         // Footer: Save & Apply (must be added to a PreferencesGroup, not directly to the Page)
-        const footer = new Adw.ActionRow({ title: _('Save your changes to apply them') });
+        const footer = new Adw.ActionRow();
+
+        const previewBtn = new Gtk.Button({ label: _('Preview Zones') });
+        previewBtn.connect('clicked', () => {
+            const zones = this._zoneRows.map(r => r.getZone());
+            try {
+                ensureConfigDir();
+                const file = Gio.File.new_for_path(PREVIEW_PATH);
+                const json = JSON.stringify(zones);
+                file.replace_contents(
+                    new TextEncoder().encode(json), null, false,
+                    Gio.FileCreateFlags.REPLACE_DESTINATION, null
+                );
+                this._toast(window, _('Showing zone preview for 5 seconds.'));
+            } catch (e) {
+                log(`Error saving preview file: ${e}`);
+                this._toast(window, _('Could not show preview.'));
+            }
+        });
+        footer.add_prefix(previewBtn);
         const saveBtn = new Gtk.Button({ label: _('Save and Apply') });
         saveBtn.add_css_class('suggested-action');
         saveBtn.connect('clicked', () => {
