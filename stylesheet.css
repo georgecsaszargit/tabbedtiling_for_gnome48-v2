@@ -1,0 +1,87 @@
+/* stylesheet.css */
+
+.zone-highlight {
+    background-color: rgba(100, 100, 255, 0.5);
+    border: 2px solid rgba(200, 200, 255, 0.8);
+    border-radius: 8px;
+    transition-duration: 150ms;
+}
+
+.zone-tab-bar {
+    background-color: rgba(30, 30, 30, 0.85);
+    padding: 0 4px;
+}
+
+.zone-tab {
+    background-color: rgba(60, 60, 60, 0.9);
+    border: 1px solid #222;
+    border-bottom-width: 0;
+    border-radius: 8px 8px 0 0;
+    padding: 2px 8px;
+    margin: 0 2px;
+    transition-duration: 150ms;
+}
+
+.zone-tab:hover {
+    background-color: rgba(80, 80, 80, 0.9);
+}
+
+.zone-tab:active,
+.zone-tab:focus,
+.zone-tab.active {
+    background-color: rgba(0, 110, 200, 0.8);
+    color: white;
+    border-color: #555;
+}
+
+.zone-tab-content {
+    spacing: 6px;
+}
+
+.zone-tab-app-icon {
+    icon-size: 16px;
+}
+
+.zone-tab-label {
+    font-size: 10pt;
+}
+
+.zone-tab-close-button {
+    background-color: transparent;
+    border: none;
+    padding: 2px;
+    border-radius: 99px;
+}
+
+.zone-tab-close-button:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* --- Grouping Styles --- */
+.zone-tab.grouped-start,
+.zone-tab.grouped-middle,
+.zone-tab.grouped-end {
+    border-color: #4A90E2;
+}
+
+.zone-tab.grouped-start {
+    border-right-width: 0;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    margin-right: 0;
+}
+
+.zone-tab.grouped-middle {
+    border-left-width: 0;
+    border-right-width: 0;
+    border-radius: 0;
+    margin-left: 0;
+    margin-right: 0;
+}
+
+.zone-tab.grouped-end {
+    border-left-width: 0;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    margin-left: 0;
+}
