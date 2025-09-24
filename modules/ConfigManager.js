@@ -36,8 +36,11 @@ export class ConfigManager {
                 backgroundColor: 'rgba(30, 30, 30, 0.85)',
                 cornerRadius: 8,
                 iconSize: 16,
-                fontSize: 10,
-                spacing: 4,
+            fontSize: 10, // in points (pt)
+            spacing: 4, // between tabs
+            maxWidth: 250, // max width of a single tab
+            titleSource: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
+            groupingCriteria: 'appName', // 'appName', 'wmClass'
             }
         };
     }

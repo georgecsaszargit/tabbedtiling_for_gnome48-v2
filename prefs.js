@@ -37,8 +37,11 @@ function defaultConfig() {
             backgroundColor: 'rgba(30,30,30,0.85)',
             cornerRadius: 8,
             iconSize: 16,
-            fontSize: 10,
-            spacing: 4,
+            fontSize: 10, // in points (pt)
+            spacing: 4, // between tabs
+            maxWidth: 250, // max width of a single tab
+            titleSource: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
+            groupingCriteria: 'appName', // 'appName', 'wmClass'
         },
     };
 }
@@ -308,16 +311,95 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             this._toast(window, _(`Generated ${numZones} zones for monitor ${monitorIndex}.`));
         });
 
-        // TabBar settings (minimal; keep your full set if you want)
-        const tabBarGroup = new Adw.PreferencesGroup({ title: _('Tab Bar'), description: _('Basic appearance options') });
+        // --- Tab Appearance Group ---
+        const tabBarGroup = new Adw.PreferencesGroup({ title: _('Tab Appearance'), description: _('Configure the look and feel of tab bars and tabs.') });
         page.add(tabBarGroup);
+        // Merge loaded config with defaults to prevent errors from missing keys
+        const cfgTabBar = { ...defaultConfig().tabBar, ...(cfg.tabBar ?? {}) };
 
+        // Height        
         const heightRow = new Adw.ActionRow({ title: _('Height (px)') });
-        const heightAdj = new Gtk.Adjustment({ lower: 16, upper: 256, step_increment: 1, value: cfg.tabBar?.height ?? 32 });
+        const heightAdj = new Gtk.Adjustment({ lower: 16, upper: 256, step_increment: 1, value: cfgTabBar.height ?? 32 });
         const heightSpin = new Gtk.SpinButton({ adjustment: heightAdj, digits: 0, halign: Gtk.Align.END });
         heightRow.add_suffix(heightSpin);
         heightRow.activatable_widget = heightSpin;
         tabBarGroup.add(heightRow);
+        
+        // Background Color
+        const colorRow = new Adw.ActionRow({ title: _('Background Color'), subtitle: _('e.g., rgba(30, 30, 30, 0.85)') });
+        const colorEntry = new Gtk.Entry({ text: cfgTabBar.backgroundColor ?? 'rgba(30,30,30,0.85)', hexpand: true });
+        colorRow.add_suffix(colorEntry);
+        colorRow.activatable_widget = colorEntry;
+        tabBarGroup.add(colorRow);
+
+        // Corner Radius
+        const radiusRow = new Adw.ActionRow({ title: _('Tab Corner Radius (px)') });
+        const radiusAdj = new Gtk.Adjustment({ lower: 0, upper: 32, step_increment: 1, value: cfgTabBar.cornerRadius ?? 8 });
+        const radiusSpin = new Gtk.SpinButton({ adjustment: radiusAdj, digits: 0, halign: Gtk.Align.END });
+        radiusRow.add_suffix(radiusSpin);
+        radiusRow.activatable_widget = radiusSpin;
+        tabBarGroup.add(radiusRow);
+
+        // Icon Size
+        const iconSizeRow = new Adw.ActionRow({ title: _('Icon Size (px)') });
+        const iconSizeAdj = new Gtk.Adjustment({ lower: 8, upper: 48, step_increment: 1, value: cfgTabBar.iconSize ?? 16 });
+        const iconSizeSpin = new Gtk.SpinButton({ adjustment: iconSizeAdj, digits: 0, halign: Gtk.Align.END });
+        iconSizeRow.add_suffix(iconSizeSpin);
+        iconSizeRow.activatable_widget = iconSizeSpin;
+        tabBarGroup.add(iconSizeRow);
+
+        // Font Size
+        const fontSizeRow = new Adw.ActionRow({ title: _('Font Size (pt)') });
+        const fontSizeAdj = new Gtk.Adjustment({ lower: 6, upper: 24, step_increment: 1, value: cfgTabBar.fontSize ?? 10 });
+        const fontSizeSpin = new Gtk.SpinButton({ adjustment: fontSizeAdj, digits: 0, halign: Gtk.Align.END });
+        fontSizeRow.add_suffix(fontSizeSpin);
+        fontSizeRow.activatable_widget = fontSizeSpin;
+        tabBarGroup.add(fontSizeRow);
+
+        // Spacing
+        const spacingRow = new Adw.ActionRow({ title: _('Spacing between Tabs (px)') });
+        const spacingAdj = new Gtk.Adjustment({ lower: 0, upper: 32, step_increment: 1, value: cfgTabBar.spacing ?? 4 });
+        const spacingSpin = new Gtk.SpinButton({ adjustment: spacingAdj, digits: 0, halign: Gtk.Align.END });
+        spacingRow.add_suffix(spacingSpin);
+        spacingRow.activatable_widget = spacingSpin;
+        tabBarGroup.add(spacingRow);
+
+        // Max Width
+        const maxWidthRow = new Adw.ActionRow({ title: _('Max Tab Width (px)') });
+        const maxWidthAdj = new Gtk.Adjustment({ lower: 50, upper: 1000, step_increment: 10, value: cfgTabBar.maxWidth ?? 250 });
+        const maxWidthSpin = new Gtk.SpinButton({ adjustment: maxWidthAdj, digits: 0, halign: Gtk.Align.END });
+        maxWidthRow.add_suffix(maxWidthSpin);
+        maxWidthRow.activatable_widget = maxWidthSpin;
+        tabBarGroup.add(maxWidthRow);
+
+        // --- Tab Behavior Group ---
+        const behaviorGroup = new Adw.PreferencesGroup({ title: _('Tab Behavior'), description: _('Configure tab titles and grouping.') });
+        page.add(behaviorGroup);
+
+        // Title Source
+        const titleSourceRow = new Adw.ActionRow({ title: _('Tab Title Source') });
+        const titleModel = new Gtk.StringList();
+        titleModel.append(_('Window Title'));
+        titleModel.append(_('Application Name'));
+        titleModel.append(_('WM_CLASS'));
+        const titleDropdown = new Gtk.DropDown({ model: titleModel });
+        const titleMap = { 'windowTitle': 0, 'appName': 1, 'wmClass': 2 };
+        titleDropdown.set_selected(titleMap[cfgTabBar.titleSource] ?? 0);
+        titleSourceRow.add_suffix(titleDropdown);
+        titleSourceRow.activatable_widget = titleDropdown;
+        behaviorGroup.add(titleSourceRow);
+
+        // Grouping Criteria
+        const groupSourceRow = new Adw.ActionRow({ title: _('Tab Grouping Criteria') });
+        const groupModel = new Gtk.StringList();
+        groupModel.append(_('Application Name'));
+        groupModel.append(_('WM_CLASS'));
+        const groupDropdown = new Gtk.DropDown({ model: groupModel });
+        const groupMap = { 'appName': 0, 'wmClass': 1 };
+        groupDropdown.set_selected(groupMap[cfgTabBar.groupingCriteria] ?? 0);
+        groupSourceRow.add_suffix(groupDropdown);
+        groupSourceRow.activatable_widget = groupDropdown;
+        behaviorGroup.add(groupSourceRow);        
 
         // Footer: Save & Apply (must be added to a PreferencesGroup, not directly to the Page)
         const footer = new Adw.ActionRow();
@@ -343,7 +425,13 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         const saveBtn = new Gtk.Button({ label: _('Save and Apply') });
         saveBtn.add_css_class('suggested-action');
         saveBtn.connect('clicked', () => {
-            const newCfg = this._collectConfig(cfg, heightSpin);
+            const newCfg = this._collectConfig(
+                cfg, {
+                    heightSpin, colorEntry, radiusSpin,
+                    iconSizeSpin, fontSizeSpin, spacingSpin,
+                    maxWidthSpin, titleDropdown, groupDropdown
+                }
+            );
             if (saveConfig(newCfg)) {
                 this._toast(window, _('Configuration saved.'));
             } else {
@@ -376,12 +464,23 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         zonesGroup.add(row);
     }
 
-    _collectConfig(existingCfg, heightSpin) {
+    _collectConfig(existingCfg, widgets) {
         const zones = this._zoneRows.map(r => r.getZone());
+        
+        const titleMap = ['windowTitle', 'appName', 'wmClass'];
+        const groupMap = ['appName', 'wmClass'];        
 
         const tabBar = {
             ...(existingCfg.tabBar ?? defaultConfig().tabBar),
-            height: heightSpin.get_value_as_int(),
+            height: widgets.heightSpin.get_value_as_int(),
+            backgroundColor: widgets.colorEntry.get_text(),
+            cornerRadius: widgets.radiusSpin.get_value_as_int(),
+            iconSize: widgets.iconSizeSpin.get_value_as_int(),
+            fontSize: widgets.fontSizeSpin.get_value_as_int(),
+            spacing: widgets.spacingSpin.get_value_as_int(),
+            maxWidth: widgets.maxWidthSpin.get_value_as_int(),
+            titleSource: titleMap[widgets.titleDropdown.get_selected()],
+            groupingCriteria: groupMap[widgets.groupDropdown.get_selected()],
         };
 
         // Basic validation: drop zones with non-positive size

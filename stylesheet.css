@@ -8,7 +8,6 @@
 }
 
 .zone-tab-bar {
-    background-color: rgba(30, 30, 30, 0.85);
     padding: 0 4px;
 }
 
@@ -16,7 +15,6 @@
     background-color: rgba(60, 60, 60, 0.9);
     border: 1px solid #222;
     border-bottom-width: 0;
-    border-radius: 8px 8px 0 0;
     padding: 2px 8px;
     margin: 0 2px;
     transition-duration: 150ms;
@@ -39,11 +37,9 @@
 }
 
 .zone-tab-app-icon {
-    icon-size: 16px;
 }
 
 .zone-tab-label {
-    font-size: 10pt;
 }
 
 .zone-tab-close-button {

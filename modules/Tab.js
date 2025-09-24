@@ -19,6 +19,7 @@ export const Tab = GObject.registerClass({
 
         this.window = window;
         this.app = app;
+        this._config = config; // Save config        
 
         const box = new St.BoxLayout({ style_class: 'zone-tab-content' });
         this.set_child(box);
@@ -29,16 +30,19 @@ export const Tab = GObject.registerClass({
                 gicon: app.get_icon(),
                 style_class: 'zone-tab-app-icon',
                 icon_size: config.iconSize || 16,
+                icon_size: this._config.iconSize ?? 16,                
             });
             box.add_child(icon);
         }
 
         // Title Label
         const label = new St.Label({
-            text: this._getTabTitle(),
+            text: this.getTabTitle(),
             y_align: Clutter.ActorAlign.CENTER,
             style_class: 'zone-tab-label',
         });
+        // Apply font size from config
+        label.style = `font-size: ${this._config.fontSize ?? 10}pt;`;        
         label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
         box.add_child(label);
 
@@ -50,16 +54,24 @@ export const Tab = GObject.registerClass({
 
         // Connect to window title changes to update the tab
         this._titleChangedId = window.connect('notify::title', () => {
-            label.set_text(this._getTabTitle());
+            label.set_text(this.getTabTitle());
         });
     }
 
-    _getTabTitle() {
-        // Fallback chain: window title -> app name -> WM_CLASS
-        return this.window.get_title() ||
-               (this.app ? this.app.get_name() : null) ||
-               this.window.get_wm_class() ||
-               'Untitled';
+    getTabTitle() {
+        const source = this._config.titleSource ?? 'windowTitle';
+        if (source === 'appName' && this.app) return this.app.get_name();
+        if (source === 'wmClass') return this.window.get_wm_class();
+
+        // Default to window title with fallbacks
+        return this.window.get_title() || (this.app ? this.app.get_name() : null) || this.window.get_wm_class() || 'Untitled';
+    }
+
+    getGroupingId() {
+        const criteria = this._config.groupingCriteria ?? 'appName';
+        if (criteria === 'wmClass') return this.window.get_wm_class();
+        // Default to app name
+        return this.app ? this.app.get_id() : (this.window.get_wm_class() || 'unknown');
     }
 
     destroy() {

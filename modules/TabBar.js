@@ -3,6 +3,7 @@ import St from 'gi://St';
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
+import GLib from 'gi://GLib';
 // import Meta from 'gi://Meta'; // (optional) if you want to type-check Meta.Window
 
 import { Tab } from './Tab.js';
@@ -24,9 +25,16 @@ export const TabBar = GObject.registerClass({
         });
         
         this.set_height(tabBarConfig.height || 32);
+        this.style = `background-color: ${tabBarConfig.backgroundColor};`;        
         this._config = tabBarConfig;
         this._tabs = new Map(); // Meta.Window -> Tab instance
         this._windowTracker = Shell.WindowTracker.get_default();
+        // Use a container for tabs to manage layout. Spacing is a CSS property.
+        this._tabContainer = new St.BoxLayout({
+            style_class: 'zone-tab-container',
+            style: `spacing: ${this._config.spacing ?? 4}px;`
+        });
+        this.add_child(this._tabContainer);        
     }
 
     addTab(window) {
@@ -37,6 +45,8 @@ export const TabBar = GObject.registerClass({
 
         const app = this._windowTracker.get_window_app(window);
         const tab = new Tab(window, app, this._config);
+        // Apply corner radius from config
+        tab.style = `border-radius: ${this._config.cornerRadius ?? 8}px ${this._config.cornerRadius ?? 8}px 0 0;`;        
         
         tab.connect('close-clicked', () => this.emit('tab-removed', window));
         // Ensure the handler is a function (not an immediate call) and returns a valid Clutter event code.
@@ -51,15 +61,16 @@ export const TabBar = GObject.registerClass({
         });
 
         this._tabs.set(window, tab);
-        this.add_child(tab);
+        this._tabContainer.add_child(tab);
 
         this._updateGroupStyles();
+        this._updateTabSizes();        
     }
 
     removeTab(window) {
         if (this._tabs.has(window)) {
             const tab = this._tabs.get(window);
-            this.remove_child(tab);
+            this._tabContainer.remove_child(tab);
             tab.destroy();
             this._tabs.delete(window);
             this._updateGroupStyles();
@@ -76,13 +87,34 @@ export const TabBar = GObject.registerClass({
         }
     }
 
-    _getAppId(window) {
-        const app = this._windowTracker.get_window_app(window);
-        return app ? app.get_id() : (window.get_wm_class() || 'unknown');
+    _updateTabSizes() {
+        const children = this._tabContainer.get_children();
+        if (children.length === 0) return;
+
+        const maxWidth = this._config.maxWidth ?? 250;
+
+        // Temporarily set all tabs to preferred width to measure total
+        children.forEach(c => c.set_width(-1));
+
+        // Use a short timeout to allow preferred widths to be calculated
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            const totalWidth = children.reduce((sum, c) => sum + c.get_width(), 0);
+            const availableWidth = this.get_width();
+
+            if (totalWidth > availableWidth) {
+                // Shrink tabs if they overflow
+                const newWidth = Math.floor(availableWidth / children.length);
+                children.forEach(c => c.set_width(Math.min(newWidth, maxWidth)));
+            } else {
+                // Otherwise, use preferred width up to the max
+                children.forEach(c => c.set_width(Math.min(c.get_preferred_width(-1)[1], maxWidth)));
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _updateGroupStyles() {
-        const children = this.get_children();
+        const children = this._tabContainer.get_children();
         if (children.length <= 1) {
             children.forEach(c => {
                 c.remove_style_class_name('grouped-start');
@@ -93,13 +125,13 @@ export const TabBar = GObject.registerClass({
         }
 
         for (let i = 0; i < children.length; i++) {
-            const currentTab = children[i];
-            const prevTab = children[i - 1];
-            const nextTab = children[i + 1];
+            const currentTab = children[i]; // This is a Tab instance
+            const prevTab = children[i - 1] ?? null;
+            const nextTab = children[i + 1] ?? null;
 
-            const currentId = this._getAppId(currentTab.window);
-            const prevId = prevTab ? this._getAppId(prevTab.window) : null;
-            const nextId = nextTab ? this._getAppId(nextTab.window) : null;
+            const currentId = currentTab.getGroupingId();
+            const prevId = prevTab ? prevTab.getGroupingId() : null;
+            const nextId = nextTab ? nextTab.getGroupingId() : null;
 
             currentTab.remove_style_class_name('grouped-start');
             currentTab.remove_style_class_name('grouped-middle');

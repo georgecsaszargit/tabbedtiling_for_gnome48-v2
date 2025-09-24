@@ -139,6 +139,14 @@ export class WindowManager {
 
     _onGrabOpBegin(display, window, op) {
         if (!this._isSnappable(window)) return;
+        const currentZone = this._findZoneForWindow(window);
+
+        // If the window is snapped and the user starts resizing it, unsnap it.
+        if (currentZone && op >= Meta.GrabOp.RESIZING_E && op <= Meta.GrabOp.RESIZING_NW) {
+            log(`Unsnapping window "${window.get_title()}" due to resize operation.`);
+            currentZone.unsnapWindow(window);
+            return;
+        }        
 
         const [, , mods] = global.get_pointer();
         if ((mods & Clutter.ModifierType.CONTROL_MASK) !== 0) {
@@ -147,7 +155,6 @@ export class WindowManager {
         }
         delete window._tilingBypass;
 
-        const currentZone = this._findZoneForWindow(window);
         if (currentZone) {
             currentZone.unsnapWindow(window);
         }
