@@ -44,7 +44,7 @@ export class WindowManager {
         this._zones = [];
 
         config.zones.forEach(zoneData => {
-            this._zones.push(new Zone(zoneData, config.tabBar, this._windowTracker));
+            this._zones.push(new Zone(zoneData, config.tabBar, this._windowTracker, this));
         });
 
         log(`Loaded ${this._zones.length} zones.`);
@@ -139,7 +139,14 @@ export class WindowManager {
 
     _onGrabOpBegin(display, window, op) {
         if (!this._isSnappable(window)) return;
-        const currentZone = this._findZoneForWindow(window);
+
+        // Per spec: "Resizing a snapped window does not unsnap it."
+        // So if the operation is a resize, we do nothing.
+        if (op >= Meta.GrabOp.RESIZING_E && op <= Meta.GrabOp.RESIZING_NW) {
+            return;
+        }
+        
+        // The rest of the function handles move operations.
 
         const [, , mods] = global.get_pointer();
         if ((mods & Clutter.ModifierType.CONTROL_MASK) !== 0) {
@@ -147,6 +154,7 @@ export class WindowManager {
             return;
         }
         delete window._tilingBypass;
+        const currentZone = this._findZoneForWindow(window);        
 
         if (currentZone) {
             currentZone.unsnapWindow(window);
@@ -244,4 +252,21 @@ export class WindowManager {
     _findZoneForWindow(window) {
         return this._zones.find(zone => zone.containsWindow(window));
     }
+
+    moveWindowsToZone(windows, sourceZone, destZone, index) {
+        if (!sourceZone || !destZone || !windows || windows.length === 0) return;
+        log(`[DND] Moving ${windows.length} window(s) from Zone "${sourceZone.name}" to Zone "${destZone.name}" at index ${index}.`);        
+
+        // First, formally unsnap all windows from the source zone.
+        // This removes them from the source tab bar and destroys the old tab actors.
+        windows.forEach(win => {
+            sourceZone.unsnapWindow(win);
+        });
+
+        // Then, snap each window to the destination zone at an incrementing index.
+        windows.forEach((win, i) => {
+            const insertionIndex = (index === -1) ? -1 : index + i;
+            destZone.snapWindow(win, insertionIndex);
+        });
+    }    
 }

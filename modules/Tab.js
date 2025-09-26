@@ -19,6 +19,7 @@ export const Tab = GObject.registerClass({
 
         this.window = window;
         this.app = app;
+        this._tabWindow = window; // Add a consistent property name for the dragger        
         this._config = config; // Save config        
 
         const box = new St.BoxLayout({

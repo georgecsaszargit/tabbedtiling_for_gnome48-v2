@@ -4,25 +4,28 @@ import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
 import GLib from 'gi://GLib';
-// import Meta from 'gi://Meta'; // (optional) if you want to type-check Meta.Window
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { Tab } from './Tab.js';
+import { TabDND } from './TabDND.js';
+
 
 export const TabBar = GObject.registerClass({
     GTypeName: 'TabbedTiling_TabBar',
     Signals: {
-        // Use TYPE_OBJECT for GObject instances (e.g., Meta.Window). TYPE_POINTER causes G_POINTER conversion errors.
         'tab-clicked': { param_types: [GObject.TYPE_OBJECT] }, // Meta.Window
         'tab-removed': { param_types: [GObject.TYPE_OBJECT] }, // Meta.Window
         'tab-moved':   { param_types: [GObject.TYPE_OBJECT] }, // Custom object
     },
 }, class TabBar extends St.BoxLayout {
-    _init(tabBarConfig) {
+    _init(tabBarConfig, zone, windowManager) {
         super._init({
             style_class: 'zone-tab-bar',
             reactive: true,
             visible: false,
         });
+        this.zone = zone; 
+        this.windowManager = windowManager;               
         
         this.set_height(tabBarConfig.height || 32);
         this.style = `background-color: ${tabBarConfig.backgroundColor};`;        
@@ -34,10 +37,13 @@ export const TabBar = GObject.registerClass({
             style_class: 'zone-tab-container',
             style: `spacing: ${this._config.spacing ?? 4}px;`
         });
-        this.add_child(this._tabContainer);        
+        this.add_child(this._tabContainer);      
+        
+        // Initialize Drag and Drop coordinator
+        this._tabDND = new TabDND(this, this.windowManager);
     }
 
-    addTab(window) {
+    addTab(window, index = -1) {
         if (this._tabs.has(window)) {
             this.setActiveTab(window);
             return;
@@ -46,22 +52,13 @@ export const TabBar = GObject.registerClass({
         const app = this._windowTracker.get_window_app(window);
         const tab = new Tab(window, app, this._config);
         // Apply corner radius from config
-        tab.style = `border-radius: ${this._config.cornerRadius ?? 8}px ${this._config.cornerRadius ?? 8}px 0 0;`;        
+        tab.style = `border-radius: ${this._config.cornerRadius ?? 8}px ${this._config.cornerRadius ?? 8}px 0 0;`;
         
         tab.connect('close-clicked', () => this.emit('tab-removed', window));
-        // Ensure the handler is a function (not an immediate call) and returns a valid Clutter event code.
-        // Also accept (actor, event) signature to avoid any accidental param marshalling issues.
-        tab.connect('button-press-event', (_actor, _event) => {
-            try {
-                this.emit('tab-clicked', window); // window is a GObject (Meta.Window), matches TYPE_OBJECT
-            } catch (e) {
-                logError(e, 'Emitting tab-clicked failed');
-            }
-            return Clutter.EVENT_STOP;
-        });
+        this._tabDND.initPointerHandlers(tab);
 
         this._tabs.set(window, tab);
-        this._tabContainer.add_child(tab);
+        this._tabContainer.insert_child_at_index(tab, index);        
 
         this._updateGroupStyles();
         this._updateTabSizes();        
@@ -146,9 +143,24 @@ export const TabBar = GObject.registerClass({
         }
     }
 
+    _getGroupedTabs(startTab) {
+        const allTabs = this._tabContainer.get_children();
+        const startIndex = allTabs.indexOf(startTab);
+        const groupId = startTab.getGroupingId();
+        if (!groupId) return [startTab];
+
+        const group = [startTab];
+        // Search backwards
+        for (let i = startIndex - 1; i >= 0 && allTabs[i].getGroupingId() === groupId; i--) group.unshift(allTabs[i]);
+        // Search forwards
+        for (let i = startIndex + 1; i < allTabs.length && allTabs[i].getGroupingId() === groupId; i++) group.push(allTabs[i]);
+        return group;
+    }    
+
     destroy() {
+        this._tabDND.destroy();
         this._tabs.forEach(tab => tab.destroy());
         this._tabs.clear();
         super.destroy();
-    }
+    }    
 });
