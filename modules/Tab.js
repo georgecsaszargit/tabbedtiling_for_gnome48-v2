@@ -29,7 +29,6 @@ export const Tab = GObject.registerClass({
             const icon = new St.Icon({
                 gicon: app.get_icon(),
                 style_class: 'zone-tab-app-icon',
-                icon_size: config.iconSize || 16,
                 icon_size: this._config.iconSize ?? 16,                
             });
             box.add_child(icon);

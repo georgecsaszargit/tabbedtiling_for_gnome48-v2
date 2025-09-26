@@ -91,26 +91,25 @@ export const TabBar = GObject.registerClass({
         const children = this._tabContainer.get_children();
         if (children.length === 0) return;
 
+        const availableWidth = this.get_width();
         const maxWidth = this._config.maxWidth ?? 250;
 
-        // Temporarily set all tabs to preferred width to measure total
-        children.forEach(c => c.set_width(-1));
+        // Find the preferred width of the widest tab to make all tabs equal.
+        const widestPreferred = children.reduce((max, c) => {
+            return Math.max(max, c.get_preferred_width(-1)[1]);
+        }, 0);
 
-        // Use a short timeout to allow preferred widths to be calculated
-        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            const totalWidth = children.reduce((sum, c) => sum + c.get_width(), 0);
-            const availableWidth = this.get_width();
+        // Determine the ideal width for each tab, capped by maxWidth.
+        const idealWidth = Math.min(widestPreferred, maxWidth);
 
-            if (totalWidth > availableWidth) {
-                // Shrink tabs if they overflow
-                const newWidth = Math.floor(availableWidth / children.length);
-                children.forEach(c => c.set_width(Math.min(newWidth, maxWidth)));
-            } else {
-                // Otherwise, use preferred width up to the max
-                children.forEach(c => c.set_width(Math.min(c.get_preferred_width(-1)[1], maxWidth)));
-            }
-            return GLib.SOURCE_REMOVE;
-        });
+        if (idealWidth * children.length > availableWidth) {
+            // If the ideal width causes an overflow, shrink all tabs equally to fit.
+            const newWidth = Math.floor(availableWidth / children.length);
+            children.forEach(c => c.set_width(newWidth));
+        } else {
+            // Otherwise, set all tabs to the same ideal width.
+            children.forEach(c => c.set_width(idealWidth));
+        }
     }
 
     _updateGroupStyles() {
