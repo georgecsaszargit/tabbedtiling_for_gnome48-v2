@@ -41,7 +41,8 @@ export class ConfigManager {
             maxWidth: 250, // max width of a single tab
             titleSource: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
             groupingCriteria: 'appName', // 'appName', 'wmClass'
-            }
+            closeButtonSize: 12,
+			}
         };
     }
 

@@ -21,7 +21,10 @@ export const Tab = GObject.registerClass({
         this.app = app;
         this._config = config; // Save config        
 
-        const box = new St.BoxLayout({ style_class: 'zone-tab-content' });
+        const box = new St.BoxLayout({
+            style_class: 'zone-tab-content',
+            x_expand: true,
+        });
         this.set_child(box);
 
         // App Icon
@@ -45,9 +48,16 @@ export const Tab = GObject.registerClass({
         label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
         box.add_child(label);
 
+        // Spacer to push the close button to the right
+        const spacer = new St.Bin({ x_expand: true });
+        box.add_child(spacer);
+
         // Close Button
         const closeButton = new St.Button({ style_class: 'zone-tab-close-button' });
-        closeButton.set_child(new St.Icon({ icon_name: 'window-close-symbolic' }));
+        closeButton.set_child(new St.Icon({
+            icon_name: 'window-close-symbolic',
+            icon_size: this._config.closeButtonSize ?? 12,
+        }));
         closeButton.connect('clicked', () => this.emit('close-clicked'));
         box.add_child(closeButton);
 

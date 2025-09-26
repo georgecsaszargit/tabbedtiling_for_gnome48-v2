@@ -192,17 +192,31 @@ export class WindowManager {
     _snapExistingWindows() {
         log("DEBUG: _snapExistingWindows() called.");
         const allWindows = global.get_window_actors().map(a => a.get_meta_window());
-        allWindows.forEach(win => {
-            if (this._isSnappable(win)) {
-                const currentZone = this._findZoneForWindow(win);
-                if (currentZone) {
-                    currentZone.snapWindow(win);
+        allWindows.forEach(window => {
+            if (this._isSnappable(window)) {
+                let targetZone = this._findZoneForWindow(window);
+
+                // If not already snapped, find the best zone based on window position
+                if (!targetZone) {
+                    targetZone = this._findBestZoneForWindow(window);
+                }
+
+                if (targetZone) {
+                    targetZone.snapWindow(window);
                 }
             }
         });
     }
 
-    _findZoneAt(x, y) {
+    _findBestZoneForWindow(window) {
+        if (!window) return null;
+        const frame = window.get_frame_rect();
+        const centerX = frame.x + frame.width / 2;
+        const centerY = frame.y + frame.height / 2;
+        return this._findZoneAt(centerX, centerY);
+    }
+
+ _findZoneAt(x, y) {
         const monitorIndex = global.display.get_monitor_index_for_rect(
             new Mtk.Rectangle({ x, y, width: 1, height: 1 })
         );

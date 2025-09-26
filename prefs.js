@@ -42,6 +42,7 @@ function defaultConfig() {
             maxWidth: 250, // max width of a single tab
             titleSource: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
             groupingCriteria: 'appName', // 'appName', 'wmClass'
+            closeButtonSize: 12,            
         },
     };
 }
@@ -372,6 +373,14 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         maxWidthRow.activatable_widget = maxWidthSpin;
         tabBarGroup.add(maxWidthRow);
 
+        // Close Button Size
+        const closeButtonSizeRow = new Adw.ActionRow({ title: _('Close Button Size (px)') });
+        const closeButtonSizeAdj = new Gtk.Adjustment({ lower: 8, upper: 32, step_increment: 1, value: cfgTabBar.closeButtonSize ?? 12 });
+        const closeButtonSizeSpin = new Gtk.SpinButton({ adjustment: closeButtonSizeAdj, digits: 0, halign: Gtk.Align.END });
+        closeButtonSizeRow.add_suffix(closeButtonSizeSpin);
+        closeButtonSizeRow.activatable_widget = closeButtonSizeSpin;
+        tabBarGroup.add(closeButtonSizeRow);
+
         // --- Tab Behavior Group ---
         const behaviorGroup = new Adw.PreferencesGroup({ title: _('Tab Behavior'), description: _('Configure tab titles and grouping.') });
         page.add(behaviorGroup);
@@ -427,7 +436,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         saveBtn.connect('clicked', () => {
             const newCfg = this._collectConfig(
                 cfg, {
-                    heightSpin, colorEntry, radiusSpin,
+                    heightSpin, colorEntry, radiusSpin, closeButtonSizeSpin,
                     iconSizeSpin, fontSizeSpin, spacingSpin,
                     maxWidthSpin, titleDropdown, groupDropdown
                 }
@@ -481,6 +490,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             maxWidth: widgets.maxWidthSpin.get_value_as_int(),
             titleSource: titleMap[widgets.titleDropdown.get_selected()],
             groupingCriteria: groupMap[widgets.groupDropdown.get_selected()],
+            closeButtonSize: widgets.closeButtonSizeSpin.get_value_as_int(),            
         };
 
         // Basic validation: drop zones with non-positive size
