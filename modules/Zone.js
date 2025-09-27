@@ -107,6 +107,10 @@ export class Zone {
         }
     }
 
+    reorderTabs() {
+        this._tabBar.reorderTabs();
+    }
+
     destroy() {
         // Unsnap all windows before destroying
         [...this._snappedWindows].forEach(win => this.unsnapWindow(win));

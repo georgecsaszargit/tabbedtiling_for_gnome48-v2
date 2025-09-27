@@ -66,7 +66,6 @@ Name: TabbedTiling
     - Title fallback chain: window title → app name → WM_CLASS.        
     - Icon = application’s icon.        
 - Tabs support:    
-    - Drag-and-drop reordering within the bar.        
     - Moving between tab bars (window moves zones when its tab moves).        
     - Close button: closes app → removes tab. If close fails, tab is removed and window floats.        
     - After tab close, right neighbor is activated; fallback = left; fallback = none.
@@ -78,6 +77,15 @@ Name: TabbedTiling
     - Groups cannot span zones.        
     - Grouping criteria are user-defined in settings (same as tab title sources).        
     - Dynamic regrouping occurs if window title/class changes or if extension is turned on or if computer comes back from sleep unless tabs are already groupped.  
+- Tabs should always auto arrange in each zone based on these rules:
+	- They should be sorted alphabetically ASC
+	- Windows of the same kind (defined in setting) should be groupped together.
+
+-Autoarrange function should be called at the minimum in the following cases:
+	- When extension launches
+	- When computer comes back from sleep or lock screen
+	- When a new window is dragged into a zone.
+	- When a window is dragged out of a zone.
 
 ## 7. Window & App Launch Behavior
 

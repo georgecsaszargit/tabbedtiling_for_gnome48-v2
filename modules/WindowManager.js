@@ -206,6 +206,8 @@ export class WindowManager {
                 }
             }
         });
+        // After processing, reorder all tabs to ensure correct grouping and sorting.
+        this._zones.forEach(zone => zone.reorderTabs());
     }
 
     _findBestZoneForWindow(window) {

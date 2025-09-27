@@ -8,6 +8,8 @@ import GLib from 'gi://GLib';
 
 import { Tab } from './Tab.js';
 
+const log = msg => console.log(`[TabbedTiling.TabBar] ${msg}`);
+
 export const TabBar = GObject.registerClass({
     GTypeName: 'TabbedTiling_TabBar',
     Signals: {
@@ -63,8 +65,7 @@ export const TabBar = GObject.registerClass({
         this._tabs.set(window, tab);
         this._tabContainer.add_child(tab);
 
-        this._updateGroupStyles();
-        this._updateTabSizes();        
+        this.reorderTabs();
     }
 
     removeTab(window) {
@@ -73,7 +74,7 @@ export const TabBar = GObject.registerClass({
             this._tabContainer.remove_child(tab);
             tab.destroy();
             this._tabs.delete(window);
-            this._updateGroupStyles();
+            this.reorderTabs();
         }
     }
     
@@ -85,6 +86,42 @@ export const TabBar = GObject.registerClass({
                 tab.remove_style_class_name('active');
             }
         }
+    }
+
+    reorderTabs() {
+        const tabs = this._tabContainer.get_children();
+
+        // No need to sort 0 or 1 tab, but we must update styles to remove grouping.
+        if (tabs.length < 2) {
+            this._updateGroupStyles();
+            return;
+        }
+
+        tabs.sort((a, b) => {
+            const groupA = a.getGroupingId();
+            const groupB = b.getGroupingId();
+
+            if (groupA < groupB) return -1;
+            if (groupA > groupB) return 1;
+
+            // If groups are the same, sort by title
+            const titleA = a.getTabTitle().toLowerCase();
+            const titleB = b.getTabTitle().toLowerCase();
+
+            if (titleA < titleB) return -1;
+            if (titleA > titleB) return 1;
+
+            return 0;
+        });
+
+        log(`Reordering ${tabs.length} tabs. New order:`);
+        tabs.forEach((tab, index) => {
+            log(`  - [${index}] Group='${tab.getGroupingId()}', Title='${tab.getTabTitle()}'`);
+            this._tabContainer.set_child_at_index(tab, index);
+        });
+
+        this._updateGroupStyles();
+        this._updateTabSizes();
     }
 
     _updateTabSizes() {
