@@ -5,7 +5,7 @@
 "version": 1,
 "shell-version": ["48"],
 "url": "https://github.com/george/tabbed-tiling",
-"session-modes": ["user", "unlock-dialog"],
+"session-modes": ["user"],
 "settings-schema": "org.gnome.shell.extensions.tabbedtiling"
 }
 

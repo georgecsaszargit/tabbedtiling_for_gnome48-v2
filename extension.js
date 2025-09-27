@@ -2,6 +2,7 @@
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { WindowManager } from './modules/WindowManager.js';
 import { ConfigManager } from './modules/ConfigManager.js';
@@ -20,6 +21,11 @@ export default class TabbedTilingExtension extends Extension {
     }
 
     enable() {
+        // Don’t render tabs/overlays on lock screen or other non-user modes.
+        // This prevents tab bars showing above the lock UI.
+        if (Main.sessionMode.currentMode !== 'user') {
+            return;
+        }    
         log('Enabling...');
 
         this._configManager = new ConfigManager();
