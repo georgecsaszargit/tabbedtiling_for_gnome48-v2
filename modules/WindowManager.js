@@ -151,6 +151,46 @@ export class WindowManager {
         }
     }
 
+    _distancePointToRect(x, y, rect) {
+        // rect: {x, y, width, height}
+        const rx1 = rect.x;
+        const ry1 = rect.y;
+        const rx2 = rect.x + rect.width;
+        const ry2 = rect.y + rect.height;
+
+        // dx/dy are zero if the point is inside the interval
+        const dx = (x < rx1) ? (rx1 - x) : (x > rx2) ? (x - rx2) : 0;
+        const dy = (y < ry1) ? (ry1 - y) : (y > ry2) ? (y - ry2) : 0;
+        // Euclidean distance to the rectangle (0 if inside)
+        return Math.hypot(dx, dy);
+    }
+
+    _findNearestZoneWithinThreshold(x, y, thresholdPx = 48) {
+        // Find the closest zone (by rect distance) on the pointer's monitor,
+        // accepting it if the pointer is within `thresholdPx` of the zone.
+        const monitorIndex = global.display.get_monitor_index_for_rect(
+            new Mtk.Rectangle({ x, y, width: 1, height: 1 })
+        );
+        const monitor = Main.layoutManager.monitors[monitorIndex];
+        if (!monitor) return null;
+
+        let best = { zone: null, dist: Infinity };
+        for (const zone of this._zones) {
+            if (zone.monitorIndex !== monitorIndex) continue;
+            const rect = {
+                x: monitor.x + zone.x,
+                y: monitor.y + zone.y,
+                width: zone.width,
+                height: zone.height,
+            };
+            const d = this._distancePointToRect(x, y, rect);
+            if (d < best.dist) {
+                best = { zone, dist: d };
+            }
+        }
+        return (best.zone && best.dist <= thresholdPx) ? best.zone : null;
+    }
+
     _onGrabOpEnd(display, window) {
         if (window._tilingBypass) {
             delete window._tilingBypass;
@@ -163,14 +203,32 @@ export class WindowManager {
         this._highlighter.hideHoverHighlight();
 
         const [pointerX, pointerY] = global.get_pointer();
-        const targetZone = this._findZoneAt(pointerX, pointerY);
+        // 1) Try direct hit
+        let targetZone = this._findZoneAt(pointerX, pointerY);
 
         const originalZone = window._tilingOriginalZone;
         if (originalZone) {
             delete window._tilingOriginalZone;
         }
 
-        if (originalZone && targetZone !== originalZone) {
+        // If we dragged out of all zones (e.g., to the very top pixel),
+        // 2) Try nearest zone within a small threshold
+        if (!targetZone) {
+            targetZone = this._findNearestZoneWithinThreshold(pointerX, pointerY, 48);
+        }
+
+        // 3) If still nothing, and we had an original zone on the same monitor,
+        //    snap back to the original zone (graceful fallback).
+        if (!targetZone && originalZone) {
+            const monitorAtDrop = global.display.get_monitor_index_for_rect(
+                new Mtk.Rectangle({ x: pointerX, y: pointerY, width: 1, height: 1 })
+            );
+            if (monitorAtDrop === originalZone.monitorIndex) {
+                targetZone = originalZone;
+            }
+        }
+
+        if (originalZone && targetZone && targetZone !== originalZone) {
             originalZone.unsnapWindow(window);
         }
 
