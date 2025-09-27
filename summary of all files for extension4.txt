@@ -227,7 +227,9 @@ function defaultConfig() {
             maxWidth: 250, // max width of a single tab
             titleSource: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
             groupingCriteria: 'appName', // 'appName', 'wmClass'
-            closeButtonSize: 12,            
+            closeButtonSize: 12,    
+            sortingCriteria: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
+            sortingOrder: 'ASC', // 'ASC', 'DESC'                    
         },
     };
 }
@@ -595,6 +597,31 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         groupSourceRow.activatable_widget = groupDropdown;
         behaviorGroup.add(groupSourceRow);        
 
+        // Sorting Criteria
+        const sortSourceRow = new Adw.ActionRow({ title: _('Sorting Criteria') });
+        const sortModel = new Gtk.StringList();
+        sortModel.append(_('Window Title'));
+        sortModel.append(_('Application Name'));
+        sortModel.append(_('WM_CLASS'));
+        const sortDropdown = new Gtk.DropDown({ model: sortModel });
+        const sortMap = { 'windowTitle': 0, 'appName': 1, 'wmClass': 2 };
+        sortDropdown.set_selected(sortMap[cfgTabBar.sortingCriteria] ?? 0);
+        sortSourceRow.add_suffix(sortDropdown);
+        sortSourceRow.activatable_widget = sortDropdown;
+        behaviorGroup.add(sortSourceRow);
+
+        // Sorting Order
+        const sortOrderRow = new Adw.ActionRow({ title: _('Sorting Order') });
+        const orderModel = new Gtk.StringList();
+        orderModel.append(_('Ascending'));
+        orderModel.append(_('Descending'));
+        const orderDropdown = new Gtk.DropDown({ model: orderModel });
+        const orderMap = { 'ASC': 0, 'DESC': 1 };
+        orderDropdown.set_selected(orderMap[cfgTabBar.sortingOrder] ?? 0);
+        sortOrderRow.add_suffix(orderDropdown);
+        sortOrderRow.activatable_widget = orderDropdown;
+        behaviorGroup.add(sortOrderRow);
+
         // Footer: Save & Apply (must be added to a PreferencesGroup, not directly to the Page)
         const footer = new Adw.ActionRow();
 
@@ -623,7 +650,8 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                 cfg, {
                     heightSpin, colorEntry, radiusSpin, closeButtonSizeSpin,
                     iconSizeSpin, fontSizeSpin, spacingSpin,
-                    maxWidthSpin, titleDropdown, groupDropdown
+                    maxWidthSpin, titleDropdown, groupDropdown,
+                    sortDropdown, orderDropdown
                 }
             );
             if (saveConfig(newCfg)) {
@@ -663,6 +691,8 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         
         const titleMap = ['windowTitle', 'appName', 'wmClass'];
         const groupMap = ['appName', 'wmClass'];        
+        const sortMap = ['windowTitle', 'appName', 'wmClass'];
+        const orderMap = ['ASC', 'DESC'];
 
         const tabBar = {
             ...(existingCfg.tabBar ?? defaultConfig().tabBar),
@@ -675,7 +705,9 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             maxWidth: widgets.maxWidthSpin.get_value_as_int(),
             titleSource: titleMap[widgets.titleDropdown.get_selected()],
             groupingCriteria: groupMap[widgets.groupDropdown.get_selected()],
-            closeButtonSize: widgets.closeButtonSizeSpin.get_value_as_int(),            
+            closeButtonSize: widgets.closeButtonSizeSpin.get_value_as_int(),
+            sortingCriteria: sortMap[widgets.sortDropdown.get_selected()],
+            sortingOrder: orderMap[widgets.orderDropdown.get_selected()],
         };
 
         // Basic validation: drop zones with non-positive size
@@ -793,6 +825,22 @@ export const Tab = GObject.registerClass({
         return this.app ? this.app.get_id() : (this.window.get_wm_class() || 'unknown');
     }
 
+    getSortKey() {
+        const criteria = this._config.sortingCriteria ?? 'windowTitle';
+        if (criteria === 'appName' && this.app) return this.app.get_name();
+        if (criteria === 'wmClass') return this.window.get_wm_class();
+
+        // Default to window title with fallbacks
+        return this.window.get_title() || (this.app ? this.app.get_name() : null) || this.window.get_wm_class() || 'Untitled';
+    }
+
+    getGroupSortKey() {
+        const criteria = this._config.groupingCriteria ?? 'appName';
+        if (criteria === 'wmClass') return this.window.get_wm_class() || 'unknown';
+        // Default to app name, using the *display name* for sorting
+        return this.app ? this.app.get_name() : (this.window.get_wm_class() || 'unknown');
+    }
+
     destroy() {
         if (this._titleChangedId && this.window) {
             try {
@@ -850,6 +898,8 @@ export class ConfigManager {
             titleSource: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
             groupingCriteria: 'appName', // 'appName', 'wmClass'
             closeButtonSize: 12,
+            sortingCriteria: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
+            sortingOrder: 'ASC', // 'ASC', 'DESC'            
 			}
         };
     }
@@ -942,6 +992,8 @@ import GLib from 'gi://GLib';
 
 import { Tab } from './Tab.js';
 
+const log = msg => console.log(`[TabbedTiling.TabBar] ${msg}`);
+
 export const TabBar = GObject.registerClass({
     GTypeName: 'TabbedTiling_TabBar',
     Signals: {
@@ -997,8 +1049,7 @@ export const TabBar = GObject.registerClass({
         this._tabs.set(window, tab);
         this._tabContainer.add_child(tab);
 
-        this._updateGroupStyles();
-        this._updateTabSizes();        
+        this.reorderTabs();
     }
 
     removeTab(window) {
@@ -1007,7 +1058,7 @@ export const TabBar = GObject.registerClass({
             this._tabContainer.remove_child(tab);
             tab.destroy();
             this._tabs.delete(window);
-            this._updateGroupStyles();
+            this.reorderTabs();
         }
     }
     
@@ -1019,6 +1070,48 @@ export const TabBar = GObject.registerClass({
                 tab.remove_style_class_name('active');
             }
         }
+    }
+
+    reorderTabs(zoneName = 'Unknown') {
+        const tabs = this._tabContainer.get_children();
+
+        // No need to sort 0 or 1 tab, but we must update styles to remove grouping.
+        if (tabs.length < 2) {
+            this._updateGroupStyles();
+            return;
+        }
+
+        const sortOrder = (this._config.sortingOrder === 'DESC') ? -1 : 1;
+
+        tabs.sort((a, b) => {
+            // Primary sort is by the user-defined group criteria (using a readable name)
+            const groupA = a.getGroupSortKey()?.toLowerCase() ?? '';
+            const groupB = b.getGroupSortKey()?.toLowerCase() ?? '';
+
+            if (groupA < groupB) return -1 * sortOrder;
+            if (groupA > groupB) return 1 * sortOrder;
+
+            // Secondary sort is by the user-defined sorting criteria
+            const keyA = a.getSortKey()?.toLowerCase() ?? '';
+            const keyB = b.getSortKey()?.toLowerCase() ?? '';
+
+            let result = 0;
+            if (keyA < keyB) result = -1;
+            if (keyA > keyB) result = 1;
+
+            return result * sortOrder;
+        });
+
+        tabs.forEach((tab, index) => {
+            this._tabContainer.set_child_at_index(tab, index);
+        });
+
+        this._updateGroupStyles();
+        this._updateTabSizes();
+    }
+
+    getTabs() {
+        return this._tabContainer.get_children();
     }
 
     _updateTabSizes() {
@@ -1388,6 +1481,25 @@ export class WindowManager {
                 }
             }
         });
+        // After processing, reorder all tabs to ensure correct grouping and sorting.
+        this._zones.forEach(zone => zone.reorderTabs());
+        this._logZoneStates();
+    }
+
+    _logZoneStates() {
+        log('--- Final Zone States ---');
+        this._zones.forEach(zone => {
+            const tabs = zone.getTabs();
+            if (tabs.length === 0) return;
+
+            log(`Zone "${zone.name}" contains ${tabs.length} tabs:`);
+            tabs.forEach((tab, index) => {
+                const appName = tab.app ? tab.app.get_name() : 'N/A';
+                const windowTitle = tab.window.get_title() || 'N/A';
+                const wmClass = tab.window.get_wm_class() || 'N/A';
+                log(`  - [${index}] App='${appName}', Title='${windowTitle}', WMClass='${wmClass}'`);
+            });
+        });        
     }
 
     _findBestZoneForWindow(window) {
@@ -1540,6 +1652,14 @@ export class Zone {
         }
     }
 
+    reorderTabs() {
+        this._tabBar.reorderTabs(this.name);
+    }
+
+    getTabs() {
+        return this._tabBar.getTabs();
+    }
+
     destroy() {
         // Unsnap all windows before destroying
         [...this._snappedWindows].forEach(win => this.unsnapWindow(win));
@@ -1563,8 +1683,6 @@ export class Zone {
 "session-modes": ["user", "unlock-dialog"],
 "settings-schema": "org.gnome.shell.extensions.tabbedtiling"
 }
-
-
 
 
 

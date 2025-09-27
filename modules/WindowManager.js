@@ -61,10 +61,10 @@ export class WindowManager {
         connect(global.display, 'grab-op-begin', this._onGrabOpBegin.bind(this));
         connect(global.display, 'grab-op-end', this._onGrabOpEnd.bind(this));
         connect(global.display, 'window-created', this._onWindowCreated.bind(this));
+        connect(this._windowTracker, 'tracked-windows-changed', this._onTrackedWindowsChanged.bind(this));
         connect(Main.layoutManager, 'monitors-changed', () => this.reloadConfiguration());
 
         // Manually create a proxy for LoginManager to handle suspend/resume.
-        // This is more robust than using makeProxyWrapper, which was failing.
         const LoginManagerIface = `
         <node>
             <interface name="org.freedesktop.login1.Manager">
@@ -96,11 +96,8 @@ export class WindowManager {
                         connect(this._loginProxy, 'g-signal', (p, sender, signal, params) => {
                              if (signal === 'PrepareForSleep') {
                                 const starting = params.get_child_value(0).get_boolean();
-                                // This signal is emitted twice: once before sleep (starting=true)
-                                // and once on wakeup (starting=false). We act on wakeup.
                                 if (!starting) {
                                     log("DEBUG: System resumed from sleep, re-snapping windows.");
-                                    // Use a timeout to ensure the session is fully awake
                                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
                                         this._snapExistingWindows();
                                         return GLib.SOURCE_REMOVE;
@@ -149,7 +146,8 @@ export class WindowManager {
         delete window._tilingBypass;
 
         if (currentZone) {
-            currentZone.unsnapWindow(window);
+            window.raise();
+            window._tilingOriginalZone = currentZone;
         }
     }
 
@@ -166,6 +164,15 @@ export class WindowManager {
 
         const [pointerX, pointerY] = global.get_pointer();
         const targetZone = this._findZoneAt(pointerX, pointerY);
+
+        const originalZone = window._tilingOriginalZone;
+        if (originalZone) {
+            delete window._tilingOriginalZone;
+        }
+
+        if (originalZone && targetZone !== originalZone) {
+            originalZone.unsnapWindow(window);
+        }
 
         if (targetZone) {
             targetZone.snapWindow(window);
@@ -189,6 +196,20 @@ export class WindowManager {
         });
     }
 
+    _onTrackedWindowsChanged() {
+        const trackedWindows = new Set(global.get_window_actors().map(a => a.get_meta_window()));
+
+        for (const zone of this._zones) {
+            const snappedWindows = zone.getSnappedWindows();
+            for (const window of snappedWindows) {
+                if (!trackedWindows.has(window)) {
+                    log(`Window "${window.get_title()}" is no longer tracked, removing from zone "${zone.name}".`);
+                    zone.unsnapWindow(window);
+                }
+            }
+        }
+    }
+
     _snapExistingWindows() {
         log("DEBUG: _snapExistingWindows() called.");
         const allWindows = global.get_window_actors().map(a => a.get_meta_window());
@@ -196,7 +217,6 @@ export class WindowManager {
             if (this._isSnappable(window)) {
                 let targetZone = this._findZoneForWindow(window);
 
-                // If not already snapped, find the best zone based on window position
                 if (!targetZone) {
                     targetZone = this._findBestZoneForWindow(window);
                 }
@@ -206,7 +226,6 @@ export class WindowManager {
                 }
             }
         });
-        // After processing, reorder all tabs to ensure correct grouping and sorting.
         this._zones.forEach(zone => zone.reorderTabs());
         this._logZoneStates();
     }
@@ -224,7 +243,7 @@ export class WindowManager {
                 const wmClass = tab.window.get_wm_class() || 'N/A';
                 log(`  - [${index}] App='${appName}', Title='${windowTitle}', WMClass='${wmClass}'`);
             });
-        });        
+        });
     }
 
     _findBestZoneForWindow(window) {
@@ -235,7 +254,7 @@ export class WindowManager {
         return this._findZoneAt(centerX, centerY);
     }
 
- _findZoneAt(x, y) {
+    _findZoneAt(x, y) {
         const monitorIndex = global.display.get_monitor_index_for_rect(
             new Mtk.Rectangle({ x, y, width: 1, height: 1 })
         );

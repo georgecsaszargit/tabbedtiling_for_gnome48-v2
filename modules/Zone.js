@@ -16,11 +16,15 @@ export class Zone {
 
         this._tabBar = new TabBar(tabBarConfig);
         this._tabBar.connect('tab-clicked', (actor, window) => this.activateWindow(window));
-        this._tabBar.connect('tab-removed', (actor, window) => this.unsnapWindow(window));
+        // When the close button on a tab is clicked, the 'tab-removed' signal is emitted.
+        // We connect this to an action that closes the actual window.
+        this._tabBar.connect('tab-removed', (actor, window) => {
+            window.delete(global.get_current_time());
+        });
         this._tabBar.connect('tab-moved', (actor, { fromZone, toZone, window }) => {
             // This is a placeholder for inter-zone dragging logic
         });
-        
+
         this._updateTabBarPosition();
         Main.layoutManager.addChrome(this._tabBar);
     }
@@ -28,7 +32,7 @@ export class Zone {
     get monitor() {
         return Main.layoutManager.monitors[this.monitorIndex];
     }
-    
+
     get rect() {
         if (!this.monitor) return null;
         return {
@@ -48,7 +52,7 @@ export class Zone {
         );
         this._tabBar.set_size(this.rect.width - (2 * this.gap), tabBarHeight);
     }
-    
+
     snapWindow(window) {
         if (!this.rect) return;
 
@@ -69,7 +73,7 @@ export class Zone {
             window._tilingZoneId = this.name; // Tag the window
             this._tabBar.addTab(window);
         }
-        
+
         this.activateWindow(window);
         this._updateVisibility();
     }
@@ -88,7 +92,7 @@ export class Zone {
         }
         this._updateVisibility();
     }
-    
+
     activateWindow(window) {
         if (this._snappedWindows.has(window)) {
             window.activate(global.get_current_time());
@@ -109,6 +113,11 @@ export class Zone {
 
     reorderTabs() {
         this._tabBar.reorderTabs(this.name);
+    }
+
+    getSnappedWindows() {
+        // Return a copy to allow safe iteration while the original set might be modified.
+        return new Set(this._snappedWindows);
     }
 
     getTabs() {
