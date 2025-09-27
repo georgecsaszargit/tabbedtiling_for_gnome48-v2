@@ -1,6 +1,7 @@
 // modules/Zone.js
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Meta from 'gi://Meta';
+import GLib from 'gi://GLib';
 
 import { TabBar } from './TabBar.js';
 
@@ -53,20 +54,103 @@ export class Zone {
         this._tabBar.set_size(this.rect.width - (2 * this.gap), tabBarHeight);
     }
 
+    _ensureUntiled(window) {
+        // Some apps (including GNOME Terminal) can be in a "tiled" state.
+        // Just unmaximizing is not always enough; explicitly clear tiling.
+        try {
+            if (window.get_maximized()) {
+                window.unmaximize(Meta.MaximizeFlags.BOTH);
+            }
+            if (typeof window.get_tile_type === 'function' &&
+                window.get_tile_type() !== Meta.TileMode.NONE &&
+                typeof window.tile === 'function') {
+                window.tile(Meta.TileMode.NONE);
+            }
+        } catch (_) {
+            // Ignore if not supported on this shell version.
+        }
+    }
+
+    _twoStepMoveResize(window, x, y, w, h) {
+        // Some clients ignore a single move+resize request (especially with increments).
+        // Do a two-step: move first, then resize on idle, then a final move_resize as a fallback.
+        window.move_frame(true, x, y);
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            window.move_resize_frame(true, x, y, w, h);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    /**
+     * Try to respect WM_NORMAL_HINTS resize increments for apps like GNOME Terminal.
+     * There isn't a stable public GJS API to read the raw size hints directly,
+     * so we use a conservative heuristic:
+     *  - Detect well-known terminal classes.
+     *  - Apply typical increment values observed via `xprop` (width 10px, height 19px)
+     *    with base sizes (68x101). These may vary slightly with theme/fonts, but
+     *    will usually be accepted by the client, ensuring snaps “stick”.
+     *
+     * If the window doesn't match, we return the requested size unchanged.
+     */
+    _quantizeToSizeHints(window, requestedW, requestedH) {
+        try {
+            const klass = (window.get_wm_class && window.get_wm_class()) || '';
+            const isTerminal =
+                klass.toLowerCase().includes('gnome-terminal') ||
+                klass.toLowerCase().includes('org.gnome.terminal') ||
+                klass.toLowerCase().includes('kgx') ||                      // GNOME Console
+                klass.toLowerCase().includes('konsole') ||                  // KDE Konsole
+                klass.toLowerCase().includes('alacritty') ||
+                klass.toLowerCase().includes('kitty') ||
+                klass.toLowerCase().includes('xterm');
+
+            if (!isTerminal)
+                return [requestedW, requestedH];
+
+            // Defaults derived from your xprop for GNOME Terminal:
+            //   base size: 68x101, increments: 10x19
+            // NOTE: If your terminal uses different font metrics, tweak here.
+            const baseW = 68;
+            const baseH = 101;
+            const incW  = 10;
+            const incH  = 19;
+
+            // Snap down to the nearest valid multiple so the client always accepts it.
+            const adjW = baseW + Math.max(0, Math.floor((requestedW - baseW) / incW)) * incW;
+            const adjH = baseH + Math.max(0, Math.floor((requestedH - baseH) / incH)) * incH;
+            return [adjW, adjH];
+        } catch (_e) {
+            return [requestedW, requestedH];
+        }
+    }
+
     snapWindow(window) {
         if (!this.rect) return;
 
-        if (window.get_maximized()) {
-            window.unmaximize(Meta.MaximizeFlags.BOTH);
-        }
+        // Ensure not maximized/tiled before attempting to move.
+        this._ensureUntiled(window);
 
         const tabBarHeight = this._tabBar.height;
         const newX = this.rect.x + this.gap;
         const newY = this.rect.y + this.gap + tabBarHeight; // Position window below tab bar
-        const newWidth = this.rect.width - (2 * this.gap);
-        const newHeight = this.rect.height - (2 * this.gap) - tabBarHeight;
+        let newWidth = this.rect.width - (2 * this.gap);
+        let newHeight = this.rect.height - (2 * this.gap) - tabBarHeight;
 
-        window.move_resize_frame(true, newX, newY, newWidth, newHeight);
+        // Respect client resize increments when applicable (e.g., terminals).
+        // This prevents Mutter from ignoring our move/resize when sizes are invalid.
+        const [adjW, adjH] = this._quantizeToSizeHints(window, newWidth, newHeight);
+        newWidth = adjW;
+        newHeight = adjH;
+
+        // Perform a two-step move+resize to coax stubborn clients (e.g., GNOME Terminal).
+        this._twoStepMoveResize(window, newX, newY, newWidth, newHeight);
+        // Final belt-and-suspenders attempt with user_op=false in case the WM treats it differently.
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+            try {
+                window.move_resize_frame(false, newX, newY, newWidth, newHeight);
+            } catch (_) {}
+            return GLib.SOURCE_REMOVE;
+        });
 
         if (!this._snappedWindows.has(window)) {
             this._snappedWindows.add(window);

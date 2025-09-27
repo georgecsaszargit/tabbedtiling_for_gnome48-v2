@@ -1336,10 +1336,10 @@ export class WindowManager {
         connect(global.display, 'grab-op-begin', this._onGrabOpBegin.bind(this));
         connect(global.display, 'grab-op-end', this._onGrabOpEnd.bind(this));
         connect(global.display, 'window-created', this._onWindowCreated.bind(this));
+        connect(this._windowTracker, 'tracked-windows-changed', this._onTrackedWindowsChanged.bind(this));
         connect(Main.layoutManager, 'monitors-changed', () => this.reloadConfiguration());
 
         // Manually create a proxy for LoginManager to handle suspend/resume.
-        // This is more robust than using makeProxyWrapper, which was failing.
         const LoginManagerIface = `
         <node>
             <interface name="org.freedesktop.login1.Manager">
@@ -1371,11 +1371,8 @@ export class WindowManager {
                         connect(this._loginProxy, 'g-signal', (p, sender, signal, params) => {
                              if (signal === 'PrepareForSleep') {
                                 const starting = params.get_child_value(0).get_boolean();
-                                // This signal is emitted twice: once before sleep (starting=true)
-                                // and once on wakeup (starting=false). We act on wakeup.
                                 if (!starting) {
                                     log("DEBUG: System resumed from sleep, re-snapping windows.");
-                                    // Use a timeout to ensure the session is fully awake
                                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
                                         this._snapExistingWindows();
                                         return GLib.SOURCE_REMOVE;
@@ -1424,7 +1421,8 @@ export class WindowManager {
         delete window._tilingBypass;
 
         if (currentZone) {
-            currentZone.unsnapWindow(window);
+            window.raise();
+            window._tilingOriginalZone = currentZone;
         }
     }
 
@@ -1441,6 +1439,15 @@ export class WindowManager {
 
         const [pointerX, pointerY] = global.get_pointer();
         const targetZone = this._findZoneAt(pointerX, pointerY);
+
+        const originalZone = window._tilingOriginalZone;
+        if (originalZone) {
+            delete window._tilingOriginalZone;
+        }
+
+        if (originalZone && targetZone !== originalZone) {
+            originalZone.unsnapWindow(window);
+        }
 
         if (targetZone) {
             targetZone.snapWindow(window);
@@ -1464,6 +1471,20 @@ export class WindowManager {
         });
     }
 
+    _onTrackedWindowsChanged() {
+        const trackedWindows = new Set(global.get_window_actors().map(a => a.get_meta_window()));
+
+        for (const zone of this._zones) {
+            const snappedWindows = zone.getSnappedWindows();
+            for (const window of snappedWindows) {
+                if (!trackedWindows.has(window)) {
+                    log(`Window "${window.get_title()}" is no longer tracked, removing from zone "${zone.name}".`);
+                    zone.unsnapWindow(window);
+                }
+            }
+        }
+    }
+
     _snapExistingWindows() {
         log("DEBUG: _snapExistingWindows() called.");
         const allWindows = global.get_window_actors().map(a => a.get_meta_window());
@@ -1471,7 +1492,6 @@ export class WindowManager {
             if (this._isSnappable(window)) {
                 let targetZone = this._findZoneForWindow(window);
 
-                // If not already snapped, find the best zone based on window position
                 if (!targetZone) {
                     targetZone = this._findBestZoneForWindow(window);
                 }
@@ -1481,7 +1501,6 @@ export class WindowManager {
                 }
             }
         });
-        // After processing, reorder all tabs to ensure correct grouping and sorting.
         this._zones.forEach(zone => zone.reorderTabs());
         this._logZoneStates();
     }
@@ -1499,7 +1518,7 @@ export class WindowManager {
                 const wmClass = tab.window.get_wm_class() || 'N/A';
                 log(`  - [${index}] App='${appName}', Title='${windowTitle}', WMClass='${wmClass}'`);
             });
-        });        
+        });
     }
 
     _findBestZoneForWindow(window) {
@@ -1510,7 +1529,7 @@ export class WindowManager {
         return this._findZoneAt(centerX, centerY);
     }
 
- _findZoneAt(x, y) {
+    _findZoneAt(x, y) {
         const monitorIndex = global.display.get_monitor_index_for_rect(
             new Mtk.Rectangle({ x, y, width: 1, height: 1 })
         );
@@ -1561,11 +1580,15 @@ export class Zone {
 
         this._tabBar = new TabBar(tabBarConfig);
         this._tabBar.connect('tab-clicked', (actor, window) => this.activateWindow(window));
-        this._tabBar.connect('tab-removed', (actor, window) => this.unsnapWindow(window));
+        // When the close button on a tab is clicked, the 'tab-removed' signal is emitted.
+        // We connect this to an action that closes the actual window.
+        this._tabBar.connect('tab-removed', (actor, window) => {
+            window.delete(global.get_current_time());
+        });
         this._tabBar.connect('tab-moved', (actor, { fromZone, toZone, window }) => {
             // This is a placeholder for inter-zone dragging logic
         });
-        
+
         this._updateTabBarPosition();
         Main.layoutManager.addChrome(this._tabBar);
     }
@@ -1573,7 +1596,7 @@ export class Zone {
     get monitor() {
         return Main.layoutManager.monitors[this.monitorIndex];
     }
-    
+
     get rect() {
         if (!this.monitor) return null;
         return {
@@ -1593,7 +1616,7 @@ export class Zone {
         );
         this._tabBar.set_size(this.rect.width - (2 * this.gap), tabBarHeight);
     }
-    
+
     snapWindow(window) {
         if (!this.rect) return;
 
@@ -1614,7 +1637,7 @@ export class Zone {
             window._tilingZoneId = this.name; // Tag the window
             this._tabBar.addTab(window);
         }
-        
+
         this.activateWindow(window);
         this._updateVisibility();
     }
@@ -1633,7 +1656,7 @@ export class Zone {
         }
         this._updateVisibility();
     }
-    
+
     activateWindow(window) {
         if (this._snappedWindows.has(window)) {
             window.activate(global.get_current_time());
@@ -1654,6 +1677,11 @@ export class Zone {
 
     reorderTabs() {
         this._tabBar.reorderTabs(this.name);
+    }
+
+    getSnappedWindows() {
+        // Return a copy to allow safe iteration while the original set might be modified.
+        return new Set(this._snappedWindows);
     }
 
     getTabs() {
@@ -1683,6 +1711,5 @@ export class Zone {
 "session-modes": ["user", "unlock-dialog"],
 "settings-schema": "org.gnome.shell.extensions.tabbedtiling"
 }
-
 
 
