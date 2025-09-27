@@ -83,6 +83,22 @@ export const Tab = GObject.registerClass({
         return this.app ? this.app.get_id() : (this.window.get_wm_class() || 'unknown');
     }
 
+    getSortKey() {
+        const criteria = this._config.sortingCriteria ?? 'windowTitle';
+        if (criteria === 'appName' && this.app) return this.app.get_name();
+        if (criteria === 'wmClass') return this.window.get_wm_class();
+
+        // Default to window title with fallbacks
+        return this.window.get_title() || (this.app ? this.app.get_name() : null) || this.window.get_wm_class() || 'Untitled';
+    }
+
+    getGroupSortKey() {
+        const criteria = this._config.groupingCriteria ?? 'appName';
+        if (criteria === 'wmClass') return this.window.get_wm_class() || 'unknown';
+        // Default to app name, using the *display name* for sorting
+        return this.app ? this.app.get_name() : (this.window.get_wm_class() || 'unknown');
+    }
+
     destroy() {
         if (this._titleChangedId && this.window) {
             try {

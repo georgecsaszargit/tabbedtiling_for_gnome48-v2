@@ -42,6 +42,8 @@ export class ConfigManager {
             titleSource: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
             groupingCriteria: 'appName', // 'appName', 'wmClass'
             closeButtonSize: 12,
+            sortingCriteria: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
+            sortingOrder: 'ASC', // 'ASC', 'DESC'            
 			}
         };
     }

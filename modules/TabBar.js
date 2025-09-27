@@ -88,7 +88,7 @@ export const TabBar = GObject.registerClass({
         }
     }
 
-    reorderTabs() {
+    reorderTabs(zoneName = 'Unknown') {
         const tabs = this._tabContainer.get_children();
 
         // No need to sort 0 or 1 tab, but we must update styles to remove grouping.
@@ -97,31 +97,37 @@ export const TabBar = GObject.registerClass({
             return;
         }
 
+        const sortOrder = (this._config.sortingOrder === 'DESC') ? -1 : 1;
+
         tabs.sort((a, b) => {
-            const groupA = a.getGroupingId();
-            const groupB = b.getGroupingId();
+            // Primary sort is by the user-defined group criteria (using a readable name)
+            const groupA = a.getGroupSortKey()?.toLowerCase() ?? '';
+            const groupB = b.getGroupSortKey()?.toLowerCase() ?? '';
 
-            if (groupA < groupB) return -1;
-            if (groupA > groupB) return 1;
+            if (groupA < groupB) return -1 * sortOrder;
+            if (groupA > groupB) return 1 * sortOrder;
 
-            // If groups are the same, sort by title
-            const titleA = a.getTabTitle().toLowerCase();
-            const titleB = b.getTabTitle().toLowerCase();
+            // Secondary sort is by the user-defined sorting criteria
+            const keyA = a.getSortKey()?.toLowerCase() ?? '';
+            const keyB = b.getSortKey()?.toLowerCase() ?? '';
 
-            if (titleA < titleB) return -1;
-            if (titleA > titleB) return 1;
+            let result = 0;
+            if (keyA < keyB) result = -1;
+            if (keyA > keyB) result = 1;
 
-            return 0;
+            return result * sortOrder;
         });
 
-        log(`Reordering ${tabs.length} tabs. New order:`);
         tabs.forEach((tab, index) => {
-            log(`  - [${index}] Group='${tab.getGroupingId()}', Title='${tab.getTabTitle()}'`);
             this._tabContainer.set_child_at_index(tab, index);
         });
 
         this._updateGroupStyles();
         this._updateTabSizes();
+    }
+
+    getTabs() {
+        return this._tabContainer.get_children();
     }
 
     _updateTabSizes() {

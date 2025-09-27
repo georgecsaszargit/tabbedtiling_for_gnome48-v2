@@ -108,7 +108,11 @@ export class Zone {
     }
 
     reorderTabs() {
-        this._tabBar.reorderTabs();
+        this._tabBar.reorderTabs(this.name);
+    }
+
+    getTabs() {
+        return this._tabBar.getTabs();
     }
 
     destroy() {

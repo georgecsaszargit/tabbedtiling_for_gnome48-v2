@@ -208,6 +208,23 @@ export class WindowManager {
         });
         // After processing, reorder all tabs to ensure correct grouping and sorting.
         this._zones.forEach(zone => zone.reorderTabs());
+        this._logZoneStates();
+    }
+
+    _logZoneStates() {
+        log('--- Final Zone States ---');
+        this._zones.forEach(zone => {
+            const tabs = zone.getTabs();
+            if (tabs.length === 0) return;
+
+            log(`Zone "${zone.name}" contains ${tabs.length} tabs:`);
+            tabs.forEach((tab, index) => {
+                const appName = tab.app ? tab.app.get_name() : 'N/A';
+                const windowTitle = tab.window.get_title() || 'N/A';
+                const wmClass = tab.window.get_wm_class() || 'N/A';
+                log(`  - [${index}] App='${appName}', Title='${windowTitle}', WMClass='${wmClass}'`);
+            });
+        });        
     }
 
     _findBestZoneForWindow(window) {

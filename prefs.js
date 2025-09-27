@@ -42,7 +42,9 @@ function defaultConfig() {
             maxWidth: 250, // max width of a single tab
             titleSource: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
             groupingCriteria: 'appName', // 'appName', 'wmClass'
-            closeButtonSize: 12,            
+            closeButtonSize: 12,    
+            sortingCriteria: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
+            sortingOrder: 'ASC', // 'ASC', 'DESC'                    
         },
     };
 }
@@ -410,6 +412,31 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         groupSourceRow.activatable_widget = groupDropdown;
         behaviorGroup.add(groupSourceRow);        
 
+        // Sorting Criteria
+        const sortSourceRow = new Adw.ActionRow({ title: _('Sorting Criteria') });
+        const sortModel = new Gtk.StringList();
+        sortModel.append(_('Window Title'));
+        sortModel.append(_('Application Name'));
+        sortModel.append(_('WM_CLASS'));
+        const sortDropdown = new Gtk.DropDown({ model: sortModel });
+        const sortMap = { 'windowTitle': 0, 'appName': 1, 'wmClass': 2 };
+        sortDropdown.set_selected(sortMap[cfgTabBar.sortingCriteria] ?? 0);
+        sortSourceRow.add_suffix(sortDropdown);
+        sortSourceRow.activatable_widget = sortDropdown;
+        behaviorGroup.add(sortSourceRow);
+
+        // Sorting Order
+        const sortOrderRow = new Adw.ActionRow({ title: _('Sorting Order') });
+        const orderModel = new Gtk.StringList();
+        orderModel.append(_('Ascending'));
+        orderModel.append(_('Descending'));
+        const orderDropdown = new Gtk.DropDown({ model: orderModel });
+        const orderMap = { 'ASC': 0, 'DESC': 1 };
+        orderDropdown.set_selected(orderMap[cfgTabBar.sortingOrder] ?? 0);
+        sortOrderRow.add_suffix(orderDropdown);
+        sortOrderRow.activatable_widget = orderDropdown;
+        behaviorGroup.add(sortOrderRow);
+
         // Footer: Save & Apply (must be added to a PreferencesGroup, not directly to the Page)
         const footer = new Adw.ActionRow();
 
@@ -438,7 +465,8 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                 cfg, {
                     heightSpin, colorEntry, radiusSpin, closeButtonSizeSpin,
                     iconSizeSpin, fontSizeSpin, spacingSpin,
-                    maxWidthSpin, titleDropdown, groupDropdown
+                    maxWidthSpin, titleDropdown, groupDropdown,
+                    sortDropdown, orderDropdown
                 }
             );
             if (saveConfig(newCfg)) {
@@ -478,6 +506,8 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         
         const titleMap = ['windowTitle', 'appName', 'wmClass'];
         const groupMap = ['appName', 'wmClass'];        
+        const sortMap = ['windowTitle', 'appName', 'wmClass'];
+        const orderMap = ['ASC', 'DESC'];
 
         const tabBar = {
             ...(existingCfg.tabBar ?? defaultConfig().tabBar),
@@ -490,7 +520,9 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             maxWidth: widgets.maxWidthSpin.get_value_as_int(),
             titleSource: titleMap[widgets.titleDropdown.get_selected()],
             groupingCriteria: groupMap[widgets.groupDropdown.get_selected()],
-            closeButtonSize: widgets.closeButtonSizeSpin.get_value_as_int(),            
+            closeButtonSize: widgets.closeButtonSizeSpin.get_value_as_int(),
+            sortingCriteria: sortMap[widgets.sortDropdown.get_selected()],
+            sortingOrder: orderMap[widgets.orderDropdown.get_selected()],
         };
 
         // Basic validation: drop zones with non-positive size
