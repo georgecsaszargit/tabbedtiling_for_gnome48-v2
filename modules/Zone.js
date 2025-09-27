@@ -7,15 +7,14 @@ import { TabBar } from './TabBar.js';
 const log = msg => console.log(`[TabbedTiling.Zone] ${msg}`);
 
 export class Zone {
-    constructor(zoneData, tabBarConfig, windowTracker, windowManager) {
+    constructor(zoneData, tabBarConfig, windowTracker) {
         // Copy all properties from the config
         Object.assign(this, zoneData);
 
         this._snappedWindows = new Set();
         this._windowTracker = windowTracker;
-        this._windowManager = windowManager;        
 
-        this._tabBar = new TabBar(tabBarConfig, this, windowManager);
+        this._tabBar = new TabBar(tabBarConfig);
         this._tabBar.connect('tab-clicked', (actor, window) => this.activateWindow(window));
         this._tabBar.connect('tab-removed', (actor, window) => this.unsnapWindow(window));
         this._tabBar.connect('tab-moved', (actor, { fromZone, toZone, window }) => {
@@ -50,7 +49,7 @@ export class Zone {
         this._tabBar.set_size(this.rect.width - (2 * this.gap), tabBarHeight);
     }
     
-    snapWindow(window, index = -1) {
+    snapWindow(window) {
         if (!this.rect) return;
 
         if (window.get_maximized()) {
@@ -68,7 +67,7 @@ export class Zone {
         if (!this._snappedWindows.has(window)) {
             this._snappedWindows.add(window);
             window._tilingZoneId = this.name; // Tag the window
-            this._tabBar.addTab(window, index);
+            this._tabBar.addTab(window);
         }
         
         this.activateWindow(window);
