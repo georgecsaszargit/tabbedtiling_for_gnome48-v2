@@ -4,7 +4,6 @@ import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
 import GLib from 'gi://GLib';
-// import Meta from 'gi://Meta'; // (optional) if you want to type-check Meta.Window
 
 import { Tab } from './Tab.js';
 
@@ -13,7 +12,6 @@ const log = msg => console.log(`[TabbedTiling.TabBar] ${msg}`);
 export const TabBar = GObject.registerClass({
     GTypeName: 'TabbedTiling_TabBar',
     Signals: {
-        // Use TYPE_OBJECT for GObject instances (e.g., Meta.Window). TYPE_POINTER causes G_POINTER conversion errors.
         'tab-clicked': { param_types: [GObject.TYPE_OBJECT] }, // Meta.Window
         'tab-removed': { param_types: [GObject.TYPE_OBJECT] }, // Meta.Window
         'tab-moved':   { param_types: [GObject.TYPE_OBJECT] }, // Custom object
@@ -27,11 +25,11 @@ export const TabBar = GObject.registerClass({
         });
         
         this.set_height(tabBarConfig.height || 32);
-        this.style = `background-color: ${tabBarConfig.backgroundColor};`;        
+        this.style = `background-color: ${tabBarConfig.backgroundColor};`;
         this._config = tabBarConfig;
-        this._tabs = new Map(); // Meta.Window -> Tab instance
+        this._tabs = new Map();
         this._windowTracker = Shell.WindowTracker.get_default();
-        // Use a container for tabs to manage layout. Spacing is a CSS property.
+
         this._tabContainer = new St.BoxLayout({
             style_class: 'zone-tab-container',
             style: `spacing: ${this._config.spacing ?? 4}px;`
@@ -49,11 +47,9 @@ export const TabBar = GObject.registerClass({
         const tab = new Tab(window, app, this._config);
         
         tab.connect('close-clicked', () => this.emit('tab-removed', window));
-        // Ensure the handler is a function (not an immediate call) and returns a valid Clutter event code.
-        // Also accept (actor, event) signature to avoid any accidental param marshalling issues.
         tab.connect('button-press-event', (_actor, _event) => {
             try {
-                this.emit('tab-clicked', window); // window is a GObject (Meta.Window), matches TYPE_OBJECT
+                this.emit('tab-clicked', window);
             } catch (e) {
                 logError(e, 'Emitting tab-clicked failed');
             }
@@ -89,7 +85,6 @@ export const TabBar = GObject.registerClass({
     reorderTabs(zoneName = 'Unknown') {
         const tabs = this._tabContainer.get_children();
 
-        // No need to sort 0 or 1 tab, but we must update styles to remove grouping.
         if (tabs.length < 2) {
             this._updateGroupStyles();
             return;
@@ -98,14 +93,12 @@ export const TabBar = GObject.registerClass({
         const sortOrder = (this._config.sortingOrder === 'DESC') ? -1 : 1;
 
         tabs.sort((a, b) => {
-            // Primary sort is by the user-defined group criteria (using a readable name)
             const groupA = a.getGroupSortKey()?.toLowerCase() ?? '';
             const groupB = b.getGroupSortKey()?.toLowerCase() ?? '';
 
             if (groupA < groupB) return -1 * sortOrder;
             if (groupA > groupB) return 1 * sortOrder;
 
-            // Secondary sort is by the user-defined sorting criteria
             const keyA = a.getSortKey()?.toLowerCase() ?? '';
             const keyB = b.getSortKey()?.toLowerCase() ?? '';
 
@@ -135,40 +128,37 @@ export const TabBar = GObject.registerClass({
         const availableWidth = this.get_width();
         const maxWidth = this._config.maxWidth ?? 250;
 
-        // Find the preferred width of the widest tab to make all tabs equal.
         const widestPreferred = children.reduce((max, c) => {
             return Math.max(max, c.get_preferred_width(-1)[1]);
         }, 0);
 
-        // Determine the ideal width for each tab, capped by maxWidth.
         const idealWidth = Math.min(widestPreferred, maxWidth);
 
         if (idealWidth * children.length > availableWidth) {
-            // If the ideal width causes an overflow, shrink all tabs equally to fit.
             const newWidth = Math.floor(availableWidth / children.length);
             children.forEach(c => c.set_width(newWidth));
         } else {
-            // Otherwise, set all tabs to the same ideal width.
             children.forEach(c => c.set_width(idealWidth));
         }
     }
 
     _updateGroupStyles() {
         const children = this._tabContainer.get_children();
-        const baseR = this._config.cornerRadius ?? 8;        
+        const baseR = Number(this._config.cornerRadius ?? 8);
+
         if (children.length <= 1) {
             children.forEach(c => {
                 c.remove_style_class_name('grouped-start');
                 c.remove_style_class_name('grouped-middle');
                 c.remove_style_class_name('grouped-end');
-                // single tab: both top corners rounded
-                c.set_style(`border-radius: ${baseR}px ${baseR}px 0 0;`);                
+                // (1) Single tab → both corners rounded
+                c.set_style(`border-radius: ${baseR}px ${baseR}px 0 0;`);
             });
             return;
         }
 
         for (let i = 0; i < children.length; i++) {
-            const currentTab = children[i]; // This is a Tab instance
+            const currentTab = children[i];
             const prevTab = children[i - 1] ?? null;
             const nextTab = children[i + 1] ?? null;
 
@@ -179,32 +169,24 @@ export const TabBar = GObject.registerClass({
             currentTab.remove_style_class_name('grouped-start');
             currentTab.remove_style_class_name('grouped-middle');
             currentTab.remove_style_class_name('grouped-end');
-            // default radii (both rounded)
-            let tl = baseR;
-            let tr = baseR;
 
-            if (currentId === nextId && currentId !== prevId) {
+            let radiusStyle = `border-radius: ${baseR}px ${baseR}px 0 0;`;
+
+            if (currentId && currentId === nextId && currentId !== prevId) {
                 currentTab.add_style_class_name('grouped-start');
-                // leftmost in a group: NO LEFT RADIUS, keep right rounded
-                tl = 0;
-                tr = baseR;
-            } else if (currentId === prevId && currentId === nextId) {
+                // (2)(3) First in group → only top-left
+                radiusStyle = `border-radius: ${baseR}px 0 0 0;`;
+            } else if (currentId && currentId === prevId && currentId === nextId) {
                 currentTab.add_style_class_name('grouped-middle');
-                // middle: no radius at all
-                tl = 0;
-                tr = 0;
-            } else if (currentId === prevId && currentId !== nextId) {
+                // (6) Middle in group → no radii
+                radiusStyle = 'border-radius: 0;';
+            } else if (currentId && currentId === prevId && currentId !== nextId) {
                 currentTab.add_style_class_name('grouped-end');
-                // rightmost in a group: NO RIGHT RADIUS, keep left rounded
-                tl = baseR;
-                tr = 0;
-            } else {
-                // not grouped with neighbors → keep both rounded
-                tl = baseR; tr = baseR;
+                // (4)(5) Last in group → only top-right
+                radiusStyle = `border-radius: 0 ${baseR}px 0 0;`;
             }
 
-            // apply radii inline so it overrides any previous inline value
-            currentTab.set_style(`border-radius: ${tl}px ${tr}px 0 0;`);
+            currentTab.set_style(radiusStyle);
         }
     }
 
@@ -214,3 +196,4 @@ export const TabBar = GObject.registerClass({
         super.destroy();
     }
 });
+

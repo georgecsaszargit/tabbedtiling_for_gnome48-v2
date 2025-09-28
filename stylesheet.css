@@ -13,11 +13,12 @@
 
 .zone-tab {
     background-color: rgba(60, 60, 60, 0.9);
-    border: 1px solid #222; /* default; grouped tabs override below */
+    border: 1px solid #222;
     border-bottom-width: 0;
     padding: 2px 8px;
     margin: 0 2px;
     transition-duration: 150ms;
+    overflow: hidden; /* ensures child visuals don’t override radius */
 }
 
 .zone-tab:hover {
@@ -54,60 +55,36 @@
 }
 
 /* --- Grouping Styles --- */
-/* Make grouped borders thicker + more visible with a subtle glow */
 .zone-tab.grouped-start,
 .zone-tab.grouped-middle,
 .zone-tab.grouped-end {
-    /* brighter brand color */
     border-color: #4A90E2;
-    /* thicker top border across the whole group */
     border-top-width: 3px;
-    /* subtle outer glow to make the group pop on dark backgrounds */
     box-shadow: 0 0 4px rgba(74, 144, 226, 0.45);
 }
 
 .zone-tab.grouped-start {
-    /* thicker left edge for the group start; no right edge to avoid double borders */
     border-left-width: 3px;
     border-right-width: 0;
-    /* no left-side radius at all */
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
-    /* keep right side squared off so it joins cleanly */
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
     margin-right: 0;
 }
 
 .zone-tab.grouped-middle {
-    /* no side borders in the middle to keep the outline continuous */
     border-left-width: 0;
     border-right-width: 0;
-    /* no border radius at all */
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
     margin-left: 0;
     margin-right: 0;
 }
 
 .zone-tab.grouped-end {
-    /* thicker right edge for the group end; no left edge to avoid double borders */
     border-right-width: 3px;
     border-left-width: 0;
-    /* no right-side radii at all */
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
-    /* keep left side squared off too */
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
     margin-left: 0;
 }
 
-/* Optional: when the active tab is in a group, make the outline a touch stronger */
 .zone-tab.active.grouped-start,
 .zone-tab.active.grouped-middle,
 .zone-tab.active.grouped-end {
     box-shadow: 0 0 6px rgba(74, 144, 226, 0.60);
 }
+
