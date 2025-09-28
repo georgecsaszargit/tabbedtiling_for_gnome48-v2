@@ -6,6 +6,7 @@ import Gtk from 'gi://Gtk';
 import Adw from 'gi://Adw';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
+import Gdk from 'gi://Gdk';
 
 import { ExtensionPreferences, gettext as _ } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
@@ -35,7 +36,7 @@ function defaultConfig() {
         tabBar: {
             height: 32,
             backgroundColor: 'rgba(30,30,30,0.85)',
-            // NEW defaults
+            // Color keys already used by TabBar/ConfigManager
             activeBgColor: 'rgba(0, 110, 200, 0.8)',
             groupBorderColor: '#4A90E2',
             cornerRadius: 8,
@@ -214,6 +215,24 @@ class ZoneEditorRow extends Adw.ExpanderRow {
 // ---------- Preferences Window ----------
 
 export default class TabbedTilingPrefs extends ExtensionPreferences {
+    _rgbaFromString(str, fallbackStr) {
+        const rgba = new Gdk.RGBA();
+        if (str && rgba.parse(str))
+            return rgba;
+        const fb = new Gdk.RGBA();
+        fb.parse(fallbackStr || 'rgba(0,0,0,1)');
+        return fb;
+    }
+    _colorPickerRow({ parentGroup, title, subtitle, initial }) {
+        const row = new Adw.ActionRow({ title, subtitle });
+        const dialog = new Gtk.ColorDialog({ with_alpha: true });
+        const btn = new Gtk.ColorDialogButton({ dialog, halign: Gtk.Align.END });
+        btn.set_rgba(this._rgbaFromString(initial, 'rgba(0,0,0,1)'));
+        row.add_suffix(btn);
+        row.activatable_widget = btn;
+        parentGroup.add(row);
+        return btn;
+    }
     _createSpinRow(parentGroup, title, initialValue, min, max, step) {
         const row = new Adw.ActionRow({ title });
         const adj = new Gtk.Adjustment({
@@ -331,35 +350,29 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         heightRow.activatable_widget = heightSpin;
         tabBarGroup.add(heightRow);
         
-        // Background Color
-        const colorRow = new Adw.ActionRow({ title: _('Background Color'), subtitle: _('e.g., rgba(30, 30, 30, 0.85)') });
-        const colorEntry = new Gtk.Entry({ text: cfgTabBar.backgroundColor ?? 'rgba(30,30,30,0.85)', hexpand: true });
-        colorRow.add_suffix(colorEntry);
-        colorRow.activatable_widget = colorEntry;
-        tabBarGroup.add(colorRow);
+        // Tab Bar Background Color (with opacity)
+        const backgroundBtn = this._colorPickerRow({
+            parentGroup: tabBarGroup,
+            title: _('Tab Bar Background Color'),
+            subtitle: _('Pick a color and opacity'),
+            initial: cfgTabBar.backgroundColor ?? 'rgba(30,30,30,0.85)',
+        });
 
-        // NEW: Active Tab Background Color
-        const activeBgRow = new Adw.ActionRow({
+        // Active Tab Background Color (with opacity)
+        const activeBgBtn = this._colorPickerRow({
+            parentGroup: tabBarGroup,
             title: _('Active Tab Background Color'),
-            subtitle: _('e.g., rgba(0, 110, 200, 0.85) or #0070f3'),
+            subtitle: _('Pick a color and opacity'),
+            initial: cfgTabBar.activeBgColor ?? 'rgba(0,110,200,0.8)',
         });
-        const activeBgEntry = new Gtk.Entry({
-            text: cfgTabBar.activeBgColor ?? 'rgba(0, 110, 200, 0.8)',
-            hexpand: true,
-        });
-        activeBgRow.add_suffix(activeBgEntry);
-        activeBgRow.activatable_widget = activeBgEntry;
-        tabBarGroup.add(activeBgRow);
 
-        // NEW: Grouped Tabs Border Color
-        const groupBorderRow = new Adw.ActionRow({
+        // Grouped Tabs Border Color (with opacity)
+        const groupBorderBtn = this._colorPickerRow({
+            parentGroup: tabBarGroup,
             title: _('Grouped Tabs Border Color'),
-            subtitle: _('e.g., #4A90E2'),
+            subtitle: _('Pick a color and opacity'),
+            initial: cfgTabBar.groupBorderColor ?? '#4A90E2',
         });
-        const groupBorderEntry = new Gtk.Entry({ text: cfgTabBar.groupBorderColor ?? '#4A90E2', hexpand: true });
-        groupBorderRow.add_suffix(groupBorderEntry);
-        groupBorderRow.activatable_widget = groupBorderEntry;
-        tabBarGroup.add(groupBorderRow);        
 
         // Corner Radius
         const radiusRow = new Adw.ActionRow({ title: _('Tab Corner Radius (px)') });
@@ -489,7 +502,8 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         saveBtn.connect('clicked', () => {
             const newCfg = this._collectConfig(
                 cfg, {
-                    heightSpin, colorEntry, radiusSpin, closeButtonSizeSpin,
+                    heightSpin, backgroundBtn, activeBgBtn, groupBorderBtn,
+                    radiusSpin, closeButtonSizeSpin,
                     iconSizeSpin, fontSizeSpin, spacingSpin,
                     maxWidthSpin, titleDropdown, groupDropdown,
                     sortDropdown, orderDropdown
@@ -538,10 +552,9 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         const tabBar = {
             ...(existingCfg.tabBar ?? defaultConfig().tabBar),
             height: widgets.heightSpin.get_value_as_int(),
-            backgroundColor: widgets.colorEntry.get_text(),
-            // Save user-defined colors
-            activeBgColor: activeBgEntry.get_text(),
-            groupBorderColor: groupBorderEntry.get_text(),
+            backgroundColor: widgets.backgroundBtn.get_rgba().to_string(),
+            activeBgColor: widgets.activeBgBtn.get_rgba().to_string(),
+            groupBorderColor: widgets.groupBorderBtn.get_rgba().to_string(),
             cornerRadius: widgets.radiusSpin.get_value_as_int(),
             iconSize: widgets.iconSizeSpin.get_value_as_int(),
             fontSize: widgets.fontSizeSpin.get_value_as_int(),
