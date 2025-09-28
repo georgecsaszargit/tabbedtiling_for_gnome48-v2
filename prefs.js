@@ -35,6 +35,9 @@ function defaultConfig() {
         tabBar: {
             height: 32,
             backgroundColor: 'rgba(30,30,30,0.85)',
+            // NEW defaults
+            activeBgColor: 'rgba(0, 110, 200, 0.8)',
+            groupBorderColor: '#4A90E2',
             cornerRadius: 8,
             iconSize: 16,
             fontSize: 10, // in points (pt)
@@ -335,6 +338,29 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         colorRow.activatable_widget = colorEntry;
         tabBarGroup.add(colorRow);
 
+        // NEW: Active Tab Background Color
+        const activeBgRow = new Adw.ActionRow({
+            title: _('Active Tab Background Color'),
+            subtitle: _('e.g., rgba(0, 110, 200, 0.85) or #0070f3'),
+        });
+        const activeBgEntry = new Gtk.Entry({
+            text: cfgTabBar.activeBgColor ?? 'rgba(0, 110, 200, 0.8)',
+            hexpand: true,
+        });
+        activeBgRow.add_suffix(activeBgEntry);
+        activeBgRow.activatable_widget = activeBgEntry;
+        tabBarGroup.add(activeBgRow);
+
+        // NEW: Grouped Tabs Border Color
+        const groupBorderRow = new Adw.ActionRow({
+            title: _('Grouped Tabs Border Color'),
+            subtitle: _('e.g., #4A90E2'),
+        });
+        const groupBorderEntry = new Gtk.Entry({ text: cfgTabBar.groupBorderColor ?? '#4A90E2', hexpand: true });
+        groupBorderRow.add_suffix(groupBorderEntry);
+        groupBorderRow.activatable_widget = groupBorderEntry;
+        tabBarGroup.add(groupBorderRow);        
+
         // Corner Radius
         const radiusRow = new Adw.ActionRow({ title: _('Tab Corner Radius (px)') });
         const radiusAdj = new Gtk.Adjustment({ lower: 0, upper: 32, step_increment: 1, value: cfgTabBar.cornerRadius ?? 8 });
@@ -513,6 +539,9 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             ...(existingCfg.tabBar ?? defaultConfig().tabBar),
             height: widgets.heightSpin.get_value_as_int(),
             backgroundColor: widgets.colorEntry.get_text(),
+            // Save user-defined colors
+            activeBgColor: activeBgEntry.get_text(),
+            groupBorderColor: groupBorderEntry.get_text(),
             cornerRadius: widgets.radiusSpin.get_value_as_int(),
             iconSize: widgets.iconSizeSpin.get_value_as_int(),
             fontSize: widgets.fontSizeSpin.get_value_as_int(),

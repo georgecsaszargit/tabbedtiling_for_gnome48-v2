@@ -30,12 +30,55 @@ export const TabBar = GObject.registerClass({
         this._tabs = new Map();
         this._windowTracker = Shell.WindowTracker.get_default();
 
+        // Settings-driven colors (with sensible fallbacks)
+        this._activeBgColor = String(this._config.activeBgColor ?? 'rgba(0, 110, 200, 0.8)');
+        this._groupBorderColor = String(this._config.groupBorderColor ?? '#4A90E2');
+
         this._tabContainer = new St.BoxLayout({
             style_class: 'zone-tab-container',
             style: `spacing: ${this._config.spacing ?? 4}px;`
         });
         this.add_child(this._tabContainer);        
     }
+
+    /* ---------- tiny helpers to compose inline styles without clobbering ---------- */
+
+    _ensureStyleSlots(tab) {
+        // Keep separate parts and join them so set_style never overwrites others
+        if (!tab.__ttStyleParts) {
+            tab.__ttStyleParts = {
+                radius: '',     // e.g., 'border-radius: 8px 8px 0 0;'
+                bg: '',         // e.g., 'background-color: rgba(...);'
+                border: '',     // e.g., 'border-color: #4A90E2;'
+            };
+        }
+        return tab.__ttStyleParts;
+    }
+
+    _applyInlineStyle(tab) {
+        const p = this._ensureStyleSlots(tab);
+        tab.set_style(`${p.radius}${p.bg}${p.border}`);
+    }
+
+    _setRadius(tab, css) {
+        const p = this._ensureStyleSlots(tab);
+        p.radius = css ? `border-radius: ${css};` : '';
+        this._applyInlineStyle(tab);
+    }
+
+    _setBg(tab, css) {
+        const p = this._ensureStyleSlots(tab);
+        p.bg = css ? `background-color: ${css};` : '';
+        this._applyInlineStyle(tab);
+    }
+
+    _setBorderColor(tab, css) {
+        const p = this._ensureStyleSlots(tab);
+        p.border = css ? `border-color: ${css};` : '';
+        this._applyInlineStyle(tab);
+    }
+
+    /* ----------------------------------------------------------------------------- */
 
     addTab(window) {
         if (this._tabs.has(window)) {
@@ -76,8 +119,12 @@ export const TabBar = GObject.registerClass({
         for (const [win, tab] of this._tabs.entries()) {
             if (win === window) {
                 tab.add_style_class_name('active');
+                // settings-defined active bg
+                this._setBg(tab, this._activeBgColor);
             } else {
                 tab.remove_style_class_name('active');
+                // clear bg override; fall back to CSS default
+                this._setBg(tab, '');
             }
         }
     }
@@ -152,7 +199,9 @@ export const TabBar = GObject.registerClass({
                 c.remove_style_class_name('grouped-middle');
                 c.remove_style_class_name('grouped-end');
                 // (1) Single tab → both corners rounded
-                c.set_style(`border-radius: ${baseR}px ${baseR}px 0 0;`);
+                this._setRadius(c, `${baseR}px ${baseR}px 0 0`);
+                // Not grouped → default border color from CSS, so clear any inline
+                this._setBorderColor(c, '');
             });
             return;
         }
@@ -170,23 +219,29 @@ export const TabBar = GObject.registerClass({
             currentTab.remove_style_class_name('grouped-middle');
             currentTab.remove_style_class_name('grouped-end');
 
-            let radiusStyle = `border-radius: ${baseR}px ${baseR}px 0 0;`;
+            // Default (solo) → both rounded + default border
+            let radiusCss = `${baseR}px ${baseR}px 0 0`;
+            let borderColorCss = '';
 
             if (currentId && currentId === nextId && currentId !== prevId) {
                 currentTab.add_style_class_name('grouped-start');
                 // (2)(3) First in group → only top-left
-                radiusStyle = `border-radius: ${baseR}px 0 0 0;`;
+                radiusCss = `${baseR}px 0 0 0`;
+                borderColorCss = this._groupBorderColor;
             } else if (currentId && currentId === prevId && currentId === nextId) {
                 currentTab.add_style_class_name('grouped-middle');
                 // (6) Middle in group → no radii
-                radiusStyle = 'border-radius: 0;';
+                radiusCss = `0`;
+                borderColorCss = this._groupBorderColor;
             } else if (currentId && currentId === prevId && currentId !== nextId) {
                 currentTab.add_style_class_name('grouped-end');
                 // (4)(5) Last in group → only top-right
-                radiusStyle = `border-radius: 0 ${baseR}px 0 0;`;
+                radiusCss = `0 ${baseR}px 0 0`;
+                borderColorCss = this._groupBorderColor;
             }
 
-            currentTab.set_style(radiusStyle);
+            this._setRadius(currentTab, radiusCss);
+            this._setBorderColor(currentTab, borderColorCss);
         }
     }
 

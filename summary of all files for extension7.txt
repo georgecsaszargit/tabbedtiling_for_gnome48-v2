@@ -1,6 +1,13 @@
+===== FILE: ./logs.sh =====
+#journalctl -f -o cat /usr/bin/gnome-shell
+journalctl -f -o cat /usr/bin/gnome-shell | nl -ba
+
+
+
 
 ===== FILE: ./stylesheet.css =====
 /* stylesheet.css */
+/* Radii and colors for active/grouped are driven inline from JS to beat theme rules. */
 
 .zone-highlight {
     background-color: rgba(100, 100, 255, 0.5);
@@ -20,6 +27,7 @@
     padding: 2px 8px;
     margin: 0 2px;
     transition-duration: 150ms;
+    overflow: hidden; /* ensures child visuals don’t override radius */
 }
 
 .zone-tab:hover {
@@ -29,7 +37,8 @@
 .zone-tab:active,
 .zone-tab:focus,
 .zone-tab.active {
-    background-color: rgba(0, 110, 200, 0.8);
+    /* The final background-color is set inline for the active tab from settings.
+       We still tweak text/border contrast here. */
     color: white;
     border-color: #555;
 }
@@ -38,11 +47,8 @@
     spacing: 6px;
 }
 
-.zone-tab-app-icon {
-}
-
-.zone-tab-label {
-}
+.zone-tab-app-icon { }
+.zone-tab-label { }
 
 .zone-tab-close-button {
     background-color: transparent;
@@ -56,33 +62,40 @@
 }
 
 /* --- Grouping Styles --- */
+/* Thickness and glow stay in CSS; color itself comes from inline JS (settings). */
 .zone-tab.grouped-start,
 .zone-tab.grouped-middle,
 .zone-tab.grouped-end {
-    border-color: #4A90E2;
+    border-top-width: 3px;
+    box-shadow: 0 0 4px rgba(74, 144, 226, 0.45);
 }
 
 .zone-tab.grouped-start {
+    border-left-width: 3px;
     border-right-width: 0;
-    border-top-right-radius: 0;
-    border-bottom-right-radius: 0;
     margin-right: 0;
 }
 
 .zone-tab.grouped-middle {
     border-left-width: 0;
     border-right-width: 0;
-    border-radius: 0;
     margin-left: 0;
     margin-right: 0;
 }
 
 .zone-tab.grouped-end {
+    border-right-width: 3px;
     border-left-width: 0;
-    border-top-left-radius: 0;
-    border-bottom-left-radius: 0;
     margin-left: 0;
 }
+
+/* Slightly stronger glow when active (color stays consistent with inline border-color) */
+.zone-tab.active.grouped-start,
+.zone-tab.active.grouped-middle,
+.zone-tab.active.grouped-end {
+    box-shadow: 0 0 6px rgba(74, 144, 226, 0.60);
+}
+
 
 
 
@@ -91,6 +104,7 @@
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { WindowManager } from './modules/WindowManager.js';
 import { ConfigManager } from './modules/ConfigManager.js';
@@ -109,6 +123,11 @@ export default class TabbedTilingExtension extends Extension {
     }
 
     enable() {
+        // Don’t render tabs/overlays on lock screen or other non-user modes.
+        // This prevents tab bars showing above the lock UI.
+        if (Main.sessionMode.currentMode !== 'user') {
+            return;
+        }    
         log('Enabling...');
 
         this._configManager = new ConfigManager();
@@ -220,6 +239,9 @@ function defaultConfig() {
         tabBar: {
             height: 32,
             backgroundColor: 'rgba(30,30,30,0.85)',
+            // NEW defaults to match ConfigManager
+            activeBgColor: 'rgba(0, 110, 200, 0.8)',
+            groupBorderColor: '#4A90E2',            
             cornerRadius: 8,
             iconSize: 16,
             fontSize: 10, // in points (pt)
@@ -520,6 +542,29 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         colorRow.activatable_widget = colorEntry;
         tabBarGroup.add(colorRow);
 
+        // NEW: Active Tab Background Color
+        const activeBgRow = new Adw.ActionRow({
+            title: _('Active Tab Background Color'),
+            subtitle: _('e.g., rgba(0, 110, 200, 0.85) or #0070f3'),
+        });
+        const activeBgEntry = new Gtk.Entry({
+            text: cfgTabBar.activeBgColor ?? 'rgba(0, 110, 200, 0.8)',
+            hexpand: true,
+        });
+        activeBgRow.add_suffix(activeBgEntry);
+        activeBgRow.activatable_widget = activeBgEntry;
+        tabBarGroup.add(activeBgRow);
+
+        // NEW: Grouped Tabs Border Color
+        const groupBorderRow = new Adw.ActionRow({
+            title: _('Grouped Tabs Border Color'),
+            subtitle: _('e.g., #4A90E2'),
+        });
+        const groupBorderEntry = new Gtk.Entry({ text: cfgTabBar.groupBorderColor ?? '#4A90E2', hexpand: true });
+        groupBorderRow.add_suffix(groupBorderEntry);
+        groupBorderRow.activatable_widget = groupBorderEntry;
+        tabBarGroup.add(groupBorderRow);        
+
         // Corner Radius
         const radiusRow = new Adw.ActionRow({ title: _('Tab Corner Radius (px)') });
         const radiusAdj = new Gtk.Adjustment({ lower: 0, upper: 32, step_increment: 1, value: cfgTabBar.cornerRadius ?? 8 });
@@ -698,6 +743,9 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             ...(existingCfg.tabBar ?? defaultConfig().tabBar),
             height: widgets.heightSpin.get_value_as_int(),
             backgroundColor: widgets.colorEntry.get_text(),
+            // NEW: save user-defined colors
+            activeBgColor: activeBgEntry.get_text(),
+            groupBorderColor: groupBorderEntry.get_text(),            
             cornerRadius: widgets.radiusSpin.get_value_as_int(),
             iconSize: widgets.iconSizeSpin.get_value_as_int(),
             fontSize: widgets.fontSizeSpin.get_value_as_int(),
@@ -890,6 +938,9 @@ export class ConfigManager {
             tabBar: {
                 height: 32,
                 backgroundColor: 'rgba(30, 30, 30, 0.85)',
+                // NEW: user-tunable colors used by TabBar.js
+                activeBgColor: 'rgba(0, 110, 200, 0.8)',
+                groupBorderColor: '#4A90E2',                
                 cornerRadius: 8,
                 iconSize: 16,
             fontSize: 10, // in points (pt)
@@ -988,7 +1039,6 @@ import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
 import GLib from 'gi://GLib';
-// import Meta from 'gi://Meta'; // (optional) if you want to type-check Meta.Window
 
 import { Tab } from './Tab.js';
 
@@ -997,7 +1047,6 @@ const log = msg => console.log(`[TabbedTiling.TabBar] ${msg}`);
 export const TabBar = GObject.registerClass({
     GTypeName: 'TabbedTiling_TabBar',
     Signals: {
-        // Use TYPE_OBJECT for GObject instances (e.g., Meta.Window). TYPE_POINTER causes G_POINTER conversion errors.
         'tab-clicked': { param_types: [GObject.TYPE_OBJECT] }, // Meta.Window
         'tab-removed': { param_types: [GObject.TYPE_OBJECT] }, // Meta.Window
         'tab-moved':   { param_types: [GObject.TYPE_OBJECT] }, // Custom object
@@ -1011,17 +1060,60 @@ export const TabBar = GObject.registerClass({
         });
         
         this.set_height(tabBarConfig.height || 32);
-        this.style = `background-color: ${tabBarConfig.backgroundColor};`;        
+        this.style = `background-color: ${tabBarConfig.backgroundColor};`;
         this._config = tabBarConfig;
-        this._tabs = new Map(); // Meta.Window -> Tab instance
+        this._tabs = new Map();
         this._windowTracker = Shell.WindowTracker.get_default();
-        // Use a container for tabs to manage layout. Spacing is a CSS property.
+
+        // Settings-driven colors (with sensible fallbacks)
+        this._activeBgColor = String(this._config.activeBgColor ?? 'rgba(0, 110, 200, 0.8)');
+        this._groupBorderColor = String(this._config.groupBorderColor ?? '#4A90E2');
+
         this._tabContainer = new St.BoxLayout({
             style_class: 'zone-tab-container',
             style: `spacing: ${this._config.spacing ?? 4}px;`
         });
         this.add_child(this._tabContainer);        
     }
+
+    /* ---------- tiny helpers to compose inline styles without clobbering ---------- */
+
+    _ensureStyleSlots(tab) {
+        // Keep separate parts and join them so set_style never overwrites others
+        if (!tab.__ttStyleParts) {
+            tab.__ttStyleParts = {
+                radius: '',     // e.g., 'border-radius: 8px 8px 0 0;'
+                bg: '',         // e.g., 'background-color: rgba(...);'
+                border: '',     // e.g., 'border-color: #4A90E2;'
+            };
+        }
+        return tab.__ttStyleParts;
+    }
+
+    _applyInlineStyle(tab) {
+        const p = this._ensureStyleSlots(tab);
+        tab.set_style(`${p.radius}${p.bg}${p.border}`);
+    }
+
+    _setRadius(tab, css) {
+        const p = this._ensureStyleSlots(tab);
+        p.radius = css ? `border-radius: ${css};` : '';
+        this._applyInlineStyle(tab);
+    }
+
+    _setBg(tab, css) {
+        const p = this._ensureStyleSlots(tab);
+        p.bg = css ? `background-color: ${css};` : '';
+        this._applyInlineStyle(tab);
+    }
+
+    _setBorderColor(tab, css) {
+        const p = this._ensureStyleSlots(tab);
+        p.border = css ? `border-color: ${css};` : '';
+        this._applyInlineStyle(tab);
+    }
+
+    /* ----------------------------------------------------------------------------- */
 
     addTab(window) {
         if (this._tabs.has(window)) {
@@ -1031,15 +1123,11 @@ export const TabBar = GObject.registerClass({
 
         const app = this._windowTracker.get_window_app(window);
         const tab = new Tab(window, app, this._config);
-        // Apply corner radius from config
-        tab.style = `border-radius: ${this._config.cornerRadius ?? 8}px ${this._config.cornerRadius ?? 8}px 0 0;`;        
         
         tab.connect('close-clicked', () => this.emit('tab-removed', window));
-        // Ensure the handler is a function (not an immediate call) and returns a valid Clutter event code.
-        // Also accept (actor, event) signature to avoid any accidental param marshalling issues.
         tab.connect('button-press-event', (_actor, _event) => {
             try {
-                this.emit('tab-clicked', window); // window is a GObject (Meta.Window), matches TYPE_OBJECT
+                this.emit('tab-clicked', window);
             } catch (e) {
                 logError(e, 'Emitting tab-clicked failed');
             }
@@ -1066,8 +1154,12 @@ export const TabBar = GObject.registerClass({
         for (const [win, tab] of this._tabs.entries()) {
             if (win === window) {
                 tab.add_style_class_name('active');
+                // settings-defined active bg
+                this._setBg(tab, this._activeBgColor);
             } else {
                 tab.remove_style_class_name('active');
+                // clear bg override; fall back to CSS default
+                this._setBg(tab, '');
             }
         }
     }
@@ -1075,7 +1167,6 @@ export const TabBar = GObject.registerClass({
     reorderTabs(zoneName = 'Unknown') {
         const tabs = this._tabContainer.get_children();
 
-        // No need to sort 0 or 1 tab, but we must update styles to remove grouping.
         if (tabs.length < 2) {
             this._updateGroupStyles();
             return;
@@ -1084,14 +1175,12 @@ export const TabBar = GObject.registerClass({
         const sortOrder = (this._config.sortingOrder === 'DESC') ? -1 : 1;
 
         tabs.sort((a, b) => {
-            // Primary sort is by the user-defined group criteria (using a readable name)
             const groupA = a.getGroupSortKey()?.toLowerCase() ?? '';
             const groupB = b.getGroupSortKey()?.toLowerCase() ?? '';
 
             if (groupA < groupB) return -1 * sortOrder;
             if (groupA > groupB) return 1 * sortOrder;
 
-            // Secondary sort is by the user-defined sorting criteria
             const keyA = a.getSortKey()?.toLowerCase() ?? '';
             const keyB = b.getSortKey()?.toLowerCase() ?? '';
 
@@ -1121,37 +1210,39 @@ export const TabBar = GObject.registerClass({
         const availableWidth = this.get_width();
         const maxWidth = this._config.maxWidth ?? 250;
 
-        // Find the preferred width of the widest tab to make all tabs equal.
         const widestPreferred = children.reduce((max, c) => {
             return Math.max(max, c.get_preferred_width(-1)[1]);
         }, 0);
 
-        // Determine the ideal width for each tab, capped by maxWidth.
         const idealWidth = Math.min(widestPreferred, maxWidth);
 
         if (idealWidth * children.length > availableWidth) {
-            // If the ideal width causes an overflow, shrink all tabs equally to fit.
             const newWidth = Math.floor(availableWidth / children.length);
             children.forEach(c => c.set_width(newWidth));
         } else {
-            // Otherwise, set all tabs to the same ideal width.
             children.forEach(c => c.set_width(idealWidth));
         }
     }
 
     _updateGroupStyles() {
         const children = this._tabContainer.get_children();
+        const baseR = Number(this._config.cornerRadius ?? 8);
+
         if (children.length <= 1) {
             children.forEach(c => {
                 c.remove_style_class_name('grouped-start');
                 c.remove_style_class_name('grouped-middle');
                 c.remove_style_class_name('grouped-end');
+                // (1) Single tab → both corners rounded
+                this._setRadius(c, `${baseR}px ${baseR}px 0 0`);
+                // Not grouped → default border color from CSS, so clear any inline
+                this._setBorderColor(c, '');
             });
             return;
         }
 
         for (let i = 0; i < children.length; i++) {
-            const currentTab = children[i]; // This is a Tab instance
+            const currentTab = children[i];
             const prevTab = children[i - 1] ?? null;
             const nextTab = children[i + 1] ?? null;
 
@@ -1163,13 +1254,29 @@ export const TabBar = GObject.registerClass({
             currentTab.remove_style_class_name('grouped-middle');
             currentTab.remove_style_class_name('grouped-end');
 
-            if (currentId === nextId && currentId !== prevId) {
+            // Default (solo) → both rounded + default border
+            let radiusCss = `${baseR}px ${baseR}px 0 0`;
+            let borderColorCss = '';
+
+            if (currentId && currentId === nextId && currentId !== prevId) {
                 currentTab.add_style_class_name('grouped-start');
-            } else if (currentId === prevId && currentId === nextId) {
+                // (2)(3) First in group → only top-left
+                radiusCss = `${baseR}px 0 0 0`;
+                borderColorCss = this._groupBorderColor;
+            } else if (currentId && currentId === prevId && currentId === nextId) {
                 currentTab.add_style_class_name('grouped-middle');
-            } else if (currentId === prevId && currentId !== nextId) {
+                // (6) Middle in group → no radii
+                radiusCss = `0`;
+                borderColorCss = this._groupBorderColor;
+            } else if (currentId && currentId === prevId && currentId !== nextId) {
                 currentTab.add_style_class_name('grouped-end');
+                // (4)(5) Last in group → only top-right
+                radiusCss = `0 ${baseR}px 0 0`;
+                borderColorCss = this._groupBorderColor;
             }
+
+            this._setRadius(currentTab, radiusCss);
+            this._setBorderColor(currentTab, borderColorCss);
         }
     }
 
@@ -1179,6 +1286,7 @@ export const TabBar = GObject.registerClass({
         super.destroy();
     }
 });
+
 
 
 
@@ -1426,6 +1534,46 @@ export class WindowManager {
         }
     }
 
+    _distancePointToRect(x, y, rect) {
+        // rect: {x, y, width, height}
+        const rx1 = rect.x;
+        const ry1 = rect.y;
+        const rx2 = rect.x + rect.width;
+        const ry2 = rect.y + rect.height;
+
+        // dx/dy are zero if the point is inside the interval
+        const dx = (x < rx1) ? (rx1 - x) : (x > rx2) ? (x - rx2) : 0;
+        const dy = (y < ry1) ? (ry1 - y) : (y > ry2) ? (y - ry2) : 0;
+        // Euclidean distance to the rectangle (0 if inside)
+        return Math.hypot(dx, dy);
+    }
+
+    _findNearestZoneWithinThreshold(x, y, thresholdPx = 48) {
+        // Find the closest zone (by rect distance) on the pointer's monitor,
+        // accepting it if the pointer is within `thresholdPx` of the zone.
+        const monitorIndex = global.display.get_monitor_index_for_rect(
+            new Mtk.Rectangle({ x, y, width: 1, height: 1 })
+        );
+        const monitor = Main.layoutManager.monitors[monitorIndex];
+        if (!monitor) return null;
+
+        let best = { zone: null, dist: Infinity };
+        for (const zone of this._zones) {
+            if (zone.monitorIndex !== monitorIndex) continue;
+            const rect = {
+                x: monitor.x + zone.x,
+                y: monitor.y + zone.y,
+                width: zone.width,
+                height: zone.height,
+            };
+            const d = this._distancePointToRect(x, y, rect);
+            if (d < best.dist) {
+                best = { zone, dist: d };
+            }
+        }
+        return (best.zone && best.dist <= thresholdPx) ? best.zone : null;
+    }
+
     _onGrabOpEnd(display, window) {
         if (window._tilingBypass) {
             delete window._tilingBypass;
@@ -1438,14 +1586,32 @@ export class WindowManager {
         this._highlighter.hideHoverHighlight();
 
         const [pointerX, pointerY] = global.get_pointer();
-        const targetZone = this._findZoneAt(pointerX, pointerY);
+        // 1) Try direct hit
+        let targetZone = this._findZoneAt(pointerX, pointerY);
 
         const originalZone = window._tilingOriginalZone;
         if (originalZone) {
             delete window._tilingOriginalZone;
         }
 
-        if (originalZone && targetZone !== originalZone) {
+        // If we dragged out of all zones (e.g., to the very top pixel),
+        // 2) Try nearest zone within a small threshold
+        if (!targetZone) {
+            targetZone = this._findNearestZoneWithinThreshold(pointerX, pointerY, 48);
+        }
+
+        // 3) If still nothing, and we had an original zone on the same monitor,
+        //    snap back to the original zone (graceful fallback).
+        if (!targetZone && originalZone) {
+            const monitorAtDrop = global.display.get_monitor_index_for_rect(
+                new Mtk.Rectangle({ x: pointerX, y: pointerY, width: 1, height: 1 })
+            );
+            if (monitorAtDrop === originalZone.monitorIndex) {
+                targetZone = originalZone;
+            }
+        }
+
+        if (originalZone && targetZone && targetZone !== originalZone) {
             originalZone.unsnapWindow(window);
         }
 
@@ -1565,6 +1731,7 @@ export class WindowManager {
 // modules/Zone.js
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Meta from 'gi://Meta';
+import GLib from 'gi://GLib';
 
 import { TabBar } from './TabBar.js';
 
@@ -1617,20 +1784,103 @@ export class Zone {
         this._tabBar.set_size(this.rect.width - (2 * this.gap), tabBarHeight);
     }
 
+    _ensureUntiled(window) {
+        // Some apps (including GNOME Terminal) can be in a "tiled" state.
+        // Just unmaximizing is not always enough; explicitly clear tiling.
+        try {
+            if (window.get_maximized()) {
+                window.unmaximize(Meta.MaximizeFlags.BOTH);
+            }
+            if (typeof window.get_tile_type === 'function' &&
+                window.get_tile_type() !== Meta.TileMode.NONE &&
+                typeof window.tile === 'function') {
+                window.tile(Meta.TileMode.NONE);
+            }
+        } catch (_) {
+            // Ignore if not supported on this shell version.
+        }
+    }
+
+    _twoStepMoveResize(window, x, y, w, h) {
+        // Some clients ignore a single move+resize request (especially with increments).
+        // Do a two-step: move first, then resize on idle, then a final move_resize as a fallback.
+        window.move_frame(true, x, y);
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            window.move_resize_frame(true, x, y, w, h);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    /**
+     * Try to respect WM_NORMAL_HINTS resize increments for apps like GNOME Terminal.
+     * There isn't a stable public GJS API to read the raw size hints directly,
+     * so we use a conservative heuristic:
+     *  - Detect well-known terminal classes.
+     *  - Apply typical increment values observed via `xprop` (width 10px, height 19px)
+     *    with base sizes (68x101). These may vary slightly with theme/fonts, but
+     *    will usually be accepted by the client, ensuring snaps “stick”.
+     *
+     * If the window doesn't match, we return the requested size unchanged.
+     */
+    _quantizeToSizeHints(window, requestedW, requestedH) {
+        try {
+            const klass = (window.get_wm_class && window.get_wm_class()) || '';
+            const isTerminal =
+                klass.toLowerCase().includes('gnome-terminal') ||
+                klass.toLowerCase().includes('org.gnome.terminal') ||
+                klass.toLowerCase().includes('kgx') ||                      // GNOME Console
+                klass.toLowerCase().includes('konsole') ||                  // KDE Konsole
+                klass.toLowerCase().includes('alacritty') ||
+                klass.toLowerCase().includes('kitty') ||
+                klass.toLowerCase().includes('xterm');
+
+            if (!isTerminal)
+                return [requestedW, requestedH];
+
+            // Defaults derived from your xprop for GNOME Terminal:
+            //   base size: 68x101, increments: 10x19
+            // NOTE: If your terminal uses different font metrics, tweak here.
+            const baseW = 68;
+            const baseH = 101;
+            const incW  = 10;
+            const incH  = 19;
+
+            // Snap down to the nearest valid multiple so the client always accepts it.
+            const adjW = baseW + Math.max(0, Math.floor((requestedW - baseW) / incW)) * incW;
+            const adjH = baseH + Math.max(0, Math.floor((requestedH - baseH) / incH)) * incH;
+            return [adjW, adjH];
+        } catch (_e) {
+            return [requestedW, requestedH];
+        }
+    }
+
     snapWindow(window) {
         if (!this.rect) return;
 
-        if (window.get_maximized()) {
-            window.unmaximize(Meta.MaximizeFlags.BOTH);
-        }
+        // Ensure not maximized/tiled before attempting to move.
+        this._ensureUntiled(window);
 
         const tabBarHeight = this._tabBar.height;
         const newX = this.rect.x + this.gap;
         const newY = this.rect.y + this.gap + tabBarHeight; // Position window below tab bar
-        const newWidth = this.rect.width - (2 * this.gap);
-        const newHeight = this.rect.height - (2 * this.gap) - tabBarHeight;
+        let newWidth = this.rect.width - (2 * this.gap);
+        let newHeight = this.rect.height - (2 * this.gap) - tabBarHeight;
 
-        window.move_resize_frame(true, newX, newY, newWidth, newHeight);
+        // Respect client resize increments when applicable (e.g., terminals).
+        // This prevents Mutter from ignoring our move/resize when sizes are invalid.
+        const [adjW, adjH] = this._quantizeToSizeHints(window, newWidth, newHeight);
+        newWidth = adjW;
+        newHeight = adjH;
+
+        // Perform a two-step move+resize to coax stubborn clients (e.g., GNOME Terminal).
+        this._twoStepMoveResize(window, newX, newY, newWidth, newHeight);
+        // Final belt-and-suspenders attempt with user_op=false in case the WM treats it differently.
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+            try {
+                window.move_resize_frame(false, newX, newY, newWidth, newHeight);
+            } catch (_) {}
+            return GLib.SOURCE_REMOVE;
+        });
 
         if (!this._snappedWindows.has(window)) {
             this._snappedWindows.add(window);
@@ -1708,8 +1958,120 @@ export class Zone {
 "version": 1,
 "shell-version": ["48"],
 "url": "https://github.com/george/tabbed-tiling",
-"session-modes": ["user", "unlock-dialog"],
+"session-modes": ["user"],
 "settings-schema": "org.gnome.shell.extensions.tabbedtiling"
 }
+
+
+
+
+===== FILE: ./instructions.txt =====
+# **GNOME Extension Specification – Tabbed Tiling (X11 only)**
+Name: TabbedTiling
+
+## 1. Configuration
+
+- Zones and settings are defined in a config file: `~/.config/tabbedtiling/config.json`
+- No settings are stored in `gsettings`.    
+- Config file is **read once at extension startup**.    
+- Settings changed in the UI take effect when **Save** is pressed.    
+- Fresh install starts with **no zones defined**.
+- There is a preview button on the setting page for the zone creation only. When pressed, zones become visible with a color at 50% opacity to show user where the zones are.
+## 2. Zone Management
+
+- Zones are defined using fixed screen coordinates relative to the **full framebuffer** (not workarea).    
+    - Properties: `x`, `y` (top-left), `width`, `height`.        
+- Each monitor can have its own independent set of zones.    
+- Multiple monitors are supported; zones are per-monitor but they don't have to be defined for each monitor if not needed.    
+- One zone per monitor can be marked as the **primary zone**.    
+- No workspace/virtual desktop support. If enabled, zones only apply to the **primary workspace**.
+- Zones can only be created horizontally, so they are right next to each other.
+- When extension starts the first time it has no zones defined. User can use the settings to add a zone by entering manual values for coordinates and etc. 
+- When entering values to define zones, start with the full resolution for each monitor you want to configure. Then, let the user select how many zones they need—there is no need to click on a button to create new zones. The calculation should be semi-automatic. For example, if you define a resolution of 1024x768, you will need to manually enter the starting coordinates for X and Y. The height and width for all zones will then be automatically calculated based on the resolution. For vertical values, the height is determined by subtracting the starting Y coordinate from the resolution height. So if Y is 68 and the resolution height is 768, then all zones will have Y: 68 and height: 700. For horizontal values, subtract the starting X coordinate from the resolution width. If X is 50 and the resolution width is 1000, you have 950 pixels remaining. These 950 pixels are then divided into as many equal parts as the number of zones specified earlier.
+## 3. Gaps
+
+- Each zone has a **gap value** (`0+`) applied like padding inside the zone.    
+- Gap does not change zone size/position; windows are inset.    
+- Same gap on all sides within a zone.    
+- Gap setting is per-zone.
+## 4. Tab Bars
+
+- Each zone has a **tab bar**:    
+    - Positioned at the zone’s top (x,y minus gap).        
+    - Configurable `height`.        
+    - Shares the same width as the zone.
+- Tabs and windows have no spacing between them; windows and tab bar touch directly,The gap that is defined is above the tab bar.   
+- Tab bar has a configurable **background color and opacity** from settings .    
+- Tab appearance:    
+    - Adjustable Rounded top-left and top-right corners (single setting).        
+    - Adjustable icon and text size.        
+    - Adjustable Tab spacing.        
+- All tabs have a max size settings that apply to all tabs equally. Tabs cannot get wider that this setting. All tabs are equal width.
+- If tabs exceed available space in tab bar, tab width decreases until all fit.    
+
+## 5. Windows & Snapping
+
+- Windows snap to zones when dragged over them:    
+    - The hovered zone highlights (50% opacity).        
+    - On release, the window resizes to zone dimensions minus gaps and tab bar height.
+- Ctrl+drag prevents snapping (creates a **floating window**).    
+- Floating windows:    
+    - Layered above zones (z-index).        
+    - Not managed by zones/tabs.        
+    - Follow system’s natural window stacking.        
+- Child dialogs and system tray popups do not snap or create tabs.    
+- Resizing a snapped window does not unsnap it. It keeps snapped status until re-dragged. Also, when resizing, the mouse pointer doesn't activate the zone highlighting/snapping when moved over other ziones.    
+- Maximized windows cover the whole screen, hiding zones and tabs.
+- When computer comes back from sleep, we have to make sure that snapping stays the same as it was before sleeping.
+- When extension starts, all windows will snap into place automatically child windows or windows open from systray.
+
+## 6. Tabs & Behavior
+
+- Every snapped window has a tab, even if only one window is in the zone.    
+- Clicking a tab activates its window.    
+- Tab contents:    
+    - Title = configurable source (`WM_CLASS class/instance`, `_NET_WM_PID`, desktop file, window role, etc.).        
+    - Title fallback chain: window title → app name → WM_CLASS.        
+    - Icon = application’s icon.        
+- Tabs support:    
+    - Moving between tab bars (window moves zones when its tab moves).        
+    - Close button: closes app → removes tab. If close fails, tab is removed and window floats.        
+    - After tab close, right neighbor is activated; fallback = left; fallback = none.
+        
+- Tabs can be **Normal** or **Grouped**:    
+    - Tab groups mean that all of the same type of tabs have a dynamically created unique bg color.
+    - Grouping is automatic for multiple windows of the same application in a zone.        
+    - Groups are only visual; tabs remain individually manageable.        
+    - Groups cannot span zones.        
+    - Grouping criteria are user-defined in settings (same as tab title sources).        
+    - Dynamic regrouping occurs if window title/class changes or if extension is turned on or if computer comes back from sleep unless tabs are already groupped.  
+- Tabs should always auto arrange in each zone based on these rules:
+	- They should be sorted alphabetically ASC
+	- Windows of the same kind (defined in setting) should be groupped together.
+
+-Autoarrange function should be called at the minimum in the following cases:
+	- When extension launches
+	- When computer comes back from sleep or lock screen
+	- When a new window is dragged into a zone.
+	- When a window is dragged out of a zone.
+
+## 7. Window & App Launch Behavior
+
+- New applications launch in the **primary zone** of the active monitor.    
+- New window automatically gets a tab and is made active.    
+- Selecting an app:    
+    - From **Alt+Tab** → activates corresponding tab/window.        
+    - From **Dash-to-Dock** → activates window and tab in its zone.        
+
+## 8. Input & Controls
+
+- Tab switching is **mouse-only** (no keyboard shortcuts are needed).    
+- Dragging a window without Ctrl shows zone highlight and snaps on release; with Ctrl, no highlight and no snapping.    
+
+## 9. Compatibility
+
+- GNOME 48 targeted, with optional support for GNOME 46–47.    
+- **X11 only**. No Wayland support.
+
 
 

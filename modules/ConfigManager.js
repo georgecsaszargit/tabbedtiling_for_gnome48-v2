@@ -34,6 +34,9 @@ export class ConfigManager {
             tabBar: {
                 height: 32,
                 backgroundColor: 'rgba(30, 30, 30, 0.85)',
+                // NEW: user-tunable colors
+                activeBgColor: 'rgba(0, 110, 200, 0.8)',
+                groupBorderColor: '#4A90E2',
                 cornerRadius: 8,
                 iconSize: 16,
             fontSize: 10, // in points (pt)
