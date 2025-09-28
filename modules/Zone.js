@@ -16,7 +16,9 @@ export class Zone {
         this._windowTracker = windowTracker;
         // Minimal MRU tracking: most-recently activated window first
         this._history = [];
-        this._activeWindow = null;        
+        this._activeWindow = null;      
+        
+        this._forceHidden = false; // NEW: for fullscreen/maximized handling          
 
         this._tabBar = new TabBar(tabBarConfig);
         this._tabBar.connect('tab-clicked', (actor, window) => this.activateWindow(window));
@@ -222,8 +224,17 @@ export class Zone {
         return this._snappedWindows.has(window);
     }
 
+    setForceHidden(hidden) {
+        if (this._forceHidden === hidden) {
+            return;
+        }
+        this._forceHidden = hidden;
+        this._updateVisibility();
+    }
+
     _updateVisibility() {
-        const shouldBeVisible = this._snappedWindows.size > 0;
+        const hasWindows = this._snappedWindows.size > 0;
+        const shouldBeVisible = hasWindows && !this._forceHidden;
         if (this._tabBar.visible !== shouldBeVisible) {
             this._tabBar.visible = shouldBeVisible;
         }

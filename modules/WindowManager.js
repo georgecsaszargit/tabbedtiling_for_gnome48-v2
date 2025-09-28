@@ -18,6 +18,7 @@ export class WindowManager {
         this._zones = [];
         this._signalConnections = [];
         this._windowTracker = Shell.WindowTracker.get_default();
+        this._windowStateSignals = new Map();        
         this._loginProxy = null;
     }
 
@@ -25,6 +26,7 @@ export class WindowManager {
         log("DEBUG: enable() called.");
         this.reloadConfiguration();
         this._connectSignals();
+        this._updateAllZonesVisibility();        
         this._snapExistingWindows();
     }
 
@@ -48,6 +50,7 @@ export class WindowManager {
         });
 
         log(`Loaded ${this._zones.length} zones.`);
+        this._updateAllZonesVisibility();        
         this._snapExistingWindows();
     }
 
@@ -126,6 +129,47 @@ export class WindowManager {
         });
         this._signalConnections = [];
         this._loginProxy = null;
+        this._disconnectWindowStateSignals();
+    }
+
+    _trackWindowState(window) {
+        if (!window || this._windowStateSignals.has(window)) {
+            return;
+        }
+
+        const onStateChanged = () => {
+            // When a window returns to a normal state, re-snap it if it belongs to a zone.
+            if (!window.get_maximized() && !window.is_fullscreen()) {
+                const zone = this._findZoneForWindow(window);
+                if (zone) {
+                    zone.snapWindow(window);
+                }
+            }
+            // Always update all tab bar visibilities.
+            this._updateAllZonesVisibility();
+        };
+
+        const ids = [
+            window.connect('notify::maximized-horizontally', onStateChanged),
+            window.connect('notify::fullscreen', onStateChanged),
+        ];
+        this._windowStateSignals.set(window, ids);
+    }
+
+    _untrackWindowState(window) {
+        if (this._windowStateSignals.has(window)) {
+            this._windowStateSignals.get(window).forEach(id => window.disconnect(id));
+            this._windowStateSignals.delete(window);
+        }
+    }
+
+    _disconnectWindowStateSignals() {
+        this._windowStateSignals.forEach((ids, window) => {
+            ids.forEach(id => {
+                try { window.disconnect(id); } catch (e) { /* ignore */ }
+            });
+        });
+        this._windowStateSignals.clear();        
     }
 
     _isSnappable(window) {
@@ -240,7 +284,7 @@ export class WindowManager {
     _onWindowCreated(display, window) {
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
             if (!window || !this._isSnappable(window)) return GLib.SOURCE_REMOVE;
-
+            this._trackWindowState(window); // Track state changes (maximized, etc.)
             const monitorIndex = window.get_monitor();
             const primaryZone = this._zones.find(z =>
                 z.monitorIndex === monitorIndex && z.isPrimary
@@ -255,16 +299,41 @@ export class WindowManager {
     }
 
     _onTrackedWindowsChanged() {
-        const trackedWindows = new Set(global.get_window_actors().map(a => a.get_meta_window()));
+        const currentWindows = new Set(global.get_window_actors().map(a => a.get_meta_window()));
+        const previouslyTracked = new Set(this._windowStateSignals.keys());
 
-        for (const zone of this._zones) {
-            const snappedWindows = zone.getSnappedWindows();
-            for (const window of snappedWindows) {
-                if (!trackedWindows.has(window)) {
+        // Untrack closed windows and remove them from zones
+        for (const window of previouslyTracked) {
+            if (!currentWindows.has(window)) {
+                this._untrackWindowState(window);
+                const zone = this._findZoneForWindow(window);
+                if (zone) {
                     log(`Window "${window.get_title()}" is no longer tracked, removing from zone "${zone.name}".`);
                     zone.unsnapWindow(window);
                 }
             }
+        }
+
+        // Track new windows
+        for (const window of currentWindows) {
+            if (!previouslyTracked.has(window)) {
+                this._trackWindowState(window);
+            }
+        }
+        this._updateAllZonesVisibility();
+    }
+
+    _updateAllZonesVisibility() {
+        const allWindows = global.get_window_actors().map(a => a.get_meta_window());
+        const monitorsWithMaximizedWindows = new Set();
+        allWindows.forEach(win => {
+            if (win.get_maximized() || win.is_fullscreen()) {
+                monitorsWithMaximizedWindows.add(win.get_monitor());
+            }
+        });
+
+        for (const zone of this._zones) {
+            zone.setForceHidden(monitorsWithMaximizedWindows.has(zone.monitorIndex));
         }
     }
 
@@ -272,6 +341,7 @@ export class WindowManager {
         log("DEBUG: _snapExistingWindows() called.");
         const allWindows = global.get_window_actors().map(a => a.get_meta_window());
         allWindows.forEach(window => {
+            this._trackWindowState(window);        
             if (this._isSnappable(window)) {
                 let targetZone = this._findZoneForWindow(window);
 
@@ -284,6 +354,7 @@ export class WindowManager {
                 }
             }
         });
+        this._updateAllZonesVisibility();        
         this._zones.forEach(zone => zone.reorderTabs());
         this._logZoneStates();
     }
