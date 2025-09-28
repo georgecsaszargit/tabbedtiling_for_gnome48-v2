@@ -1,0 +1,11 @@
+{
+"name": "Tabbed Tiling",
+"description": "A tiling window manager for GNOME Shell that uses tabs to manage windows within predefined zones.",
+"uuid": "tabbedtiling@george.com",
+"version": 1,
+"shell-version": ["48"],
+"url": "https://github.com/george/tabbed-tiling",
+"session-modes": ["user"],
+"settings-schema": "org.gnome.shell.extensions.tabbedtiling"
+}
+

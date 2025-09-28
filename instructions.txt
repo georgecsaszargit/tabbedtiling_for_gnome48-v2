@@ -1,0 +1,106 @@
+# **GNOME Extension Specification – Tabbed Tiling (X11 only)**
+Name: TabbedTiling
+
+## 1. Configuration
+
+- Zones and settings are defined in a config file: `~/.config/tabbedtiling/config.json`
+- No settings are stored in `gsettings`.    
+- Config file is **read once at extension startup**.    
+- Settings changed in the UI take effect when **Save** is pressed.    
+- Fresh install starts with **no zones defined**.
+- There is a preview button on the setting page for the zone creation only. When pressed, zones become visible with a color at 50% opacity to show user where the zones are.
+## 2. Zone Management
+
+- Zones are defined using fixed screen coordinates relative to the **full framebuffer** (not workarea).    
+    - Properties: `x`, `y` (top-left), `width`, `height`.        
+- Each monitor can have its own independent set of zones.    
+- Multiple monitors are supported; zones are per-monitor but they don't have to be defined for each monitor if not needed.    
+- One zone per monitor can be marked as the **primary zone**.    
+- No workspace/virtual desktop support. If enabled, zones only apply to the **primary workspace**.
+- Zones can only be created horizontally, so they are right next to each other.
+- When extension starts the first time it has no zones defined. User can use the settings to add a zone by entering manual values for coordinates and etc. 
+- When entering values to define zones, start with the full resolution for each monitor you want to configure. Then, let the user select how many zones they need—there is no need to click on a button to create new zones. The calculation should be semi-automatic. For example, if you define a resolution of 1024x768, you will need to manually enter the starting coordinates for X and Y. The height and width for all zones will then be automatically calculated based on the resolution. For vertical values, the height is determined by subtracting the starting Y coordinate from the resolution height. So if Y is 68 and the resolution height is 768, then all zones will have Y: 68 and height: 700. For horizontal values, subtract the starting X coordinate from the resolution width. If X is 50 and the resolution width is 1000, you have 950 pixels remaining. These 950 pixels are then divided into as many equal parts as the number of zones specified earlier.
+## 3. Gaps
+
+- Each zone has a **gap value** (`0+`) applied like padding inside the zone.    
+- Gap does not change zone size/position; windows are inset.    
+- Same gap on all sides within a zone.    
+- Gap setting is per-zone.
+## 4. Tab Bars
+
+- Each zone has a **tab bar**:    
+    - Positioned at the zone’s top (x,y minus gap).        
+    - Configurable `height`.        
+    - Shares the same width as the zone.
+- Tabs and windows have no spacing between them; windows and tab bar touch directly,The gap that is defined is above the tab bar.   
+- Tab bar has a configurable **background color and opacity** from settings .    
+- Tab appearance:    
+    - Adjustable Rounded top-left and top-right corners (single setting).        
+    - Adjustable icon and text size.        
+    - Adjustable Tab spacing.        
+- All tabs have a max size settings that apply to all tabs equally. Tabs cannot get wider that this setting. All tabs are equal width.
+- If tabs exceed available space in tab bar, tab width decreases until all fit.    
+
+## 5. Windows & Snapping
+
+- Windows snap to zones when dragged over them:    
+    - The hovered zone highlights (50% opacity).        
+    - On release, the window resizes to zone dimensions minus gaps and tab bar height.
+- Ctrl+drag prevents snapping (creates a **floating window**).    
+- Floating windows:    
+    - Layered above zones (z-index).        
+    - Not managed by zones/tabs.        
+    - Follow system’s natural window stacking.        
+- Child dialogs and system tray popups do not snap or create tabs.    
+- Resizing a snapped window does not unsnap it. It keeps snapped status until re-dragged. Also, when resizing, the mouse pointer doesn't activate the zone highlighting/snapping when moved over other ziones.    
+- Maximized windows cover the whole screen, hiding zones and tabs.
+- When computer comes back from sleep, we have to make sure that snapping stays the same as it was before sleeping.
+- When extension starts, all windows will snap into place automatically child windows or windows open from systray.
+
+## 6. Tabs & Behavior
+
+- Every snapped window has a tab, even if only one window is in the zone.    
+- Clicking a tab activates its window.    
+- Tab contents:    
+    - Title = configurable source (`WM_CLASS class/instance`, `_NET_WM_PID`, desktop file, window role, etc.).        
+    - Title fallback chain: window title → app name → WM_CLASS.        
+    - Icon = application’s icon.        
+- Tabs support:    
+    - Moving between tab bars (window moves zones when its tab moves).        
+    - Close button: closes app → removes tab. If close fails, tab is removed and window floats.        
+    - After tab close, right neighbor is activated; fallback = left; fallback = none.
+        
+- Tabs can be **Normal** or **Grouped**:    
+    - Tab groups mean that all of the same type of tabs have a dynamically created unique bg color.
+    - Grouping is automatic for multiple windows of the same application in a zone.        
+    - Groups are only visual; tabs remain individually manageable.        
+    - Groups cannot span zones.        
+    - Grouping criteria are user-defined in settings (same as tab title sources).        
+    - Dynamic regrouping occurs if window title/class changes or if extension is turned on or if computer comes back from sleep unless tabs are already groupped.  
+- Tabs should always auto arrange in each zone based on these rules:
+	- They should be sorted alphabetically ASC
+	- Windows of the same kind (defined in setting) should be groupped together.
+
+-Autoarrange function should be called at the minimum in the following cases:
+	- When extension launches
+	- When computer comes back from sleep or lock screen
+	- When a new window is dragged into a zone.
+	- When a window is dragged out of a zone.
+
+## 7. Window & App Launch Behavior
+
+- New applications launch in the **primary zone** of the active monitor.    
+- New window automatically gets a tab and is made active.    
+- Selecting an app:    
+    - From **Alt+Tab** → activates corresponding tab/window.        
+    - From **Dash-to-Dock** → activates window and tab in its zone.        
+
+## 8. Input & Controls
+
+- Tab switching is **mouse-only** (no keyboard shortcuts are needed).    
+- Dragging a window without Ctrl shows zone highlight and snaps on release; with Ctrl, no highlight and no snapping.    
+
+## 9. Compatibility
+
+- GNOME 48 targeted, with optional support for GNOME 46–47.    
+- **X11 only**. No Wayland support.
