@@ -14,6 +14,9 @@ export class Zone {
 
         this._snappedWindows = new Set();
         this._windowTracker = windowTracker;
+        // Minimal MRU tracking: most-recently activated window first
+        this._history = [];
+        this._activeWindow = null;        
 
         this._tabBar = new TabBar(tabBarConfig);
         this._tabBar.connect('tab-clicked', (actor, window) => this.activateWindow(window));
@@ -175,15 +178,28 @@ export class Zone {
     }
 
     unsnapWindow(window) {
+        const wasActive = (this._activeWindow === window);
         if (this._snappedWindows.has(window)) {
             this._snappedWindows.delete(window);
             delete window._tilingZoneId;
             this._tabBar.removeTab(window);
 
-            // Activate the next tab if available
-            if (this._snappedWindows.size > 0) {
-                const nextWindow = this._snappedWindows.values().next().value;
-                this.activateWindow(nextWindow);
+            // Remove from MRU history (and prune any stale refs while we're here)
+            this._history = this._history.filter(w => w && w !== window && this._snappedWindows.has(w));
+
+            // If the removed one was active, try to restore the most recent valid one
+            if (wasActive) {
+                const fallback = this._history.find(w => this._snappedWindows.has(w));
+                if (fallback) {
+                    this.activateWindow(fallback);
+                } else if (this._snappedWindows.size > 0) {
+                    // Final fallback: first remaining window in the zone
+                    const nextWindow = this._snappedWindows.values().next().value;
+                    this.activateWindow(nextWindow);
+                } else {
+                    // Zone is empty
+                    this._activeWindow = null;
+                }
             }
         }
         this._updateVisibility();
@@ -193,6 +209,12 @@ export class Zone {
         if (this._snappedWindows.has(window)) {
             window.activate(global.get_current_time());
             this._tabBar.setActiveTab(window);
+            // Record MRU (most recent first), dedupe, cap to 5
+            this._activeWindow = window;
+            this._history = this._history.filter(w => w && w !== window && this._snappedWindows.has(w));
+            this._history.unshift(window);
+            if (this._history.length > 5)
+                this._history.length = 5;            
         }
     }
 
