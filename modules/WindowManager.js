@@ -180,18 +180,26 @@ export class WindowManager {
 
     _onGrabOpBegin(display, window, op) {
         if (!this._isSnappable(window)) return;
-        const currentZone = this._findZoneForWindow(window);
 
+        // Bypass tiling logic if holding CTRL
         const [, , mods] = global.get_pointer();
         if ((mods & Clutter.ModifierType.CONTROL_MASK) !== 0) {
             window._tilingBypass = true;
             return;
         }
-        delete window._tilingBypass;
+        delete window._tilingBypass; // Clear it if CTRL isn't held
 
-        if (currentZone) {
-            window.raise();
-            window._tilingOriginalZone = currentZone;
+        // ONLY apply moving logic for MOVING ops. For RESIZING, we do nothing.
+        if (op === Meta.GrabOp.MOVING) {
+            const currentZone = this._findZoneForWindow(window);
+            if (currentZone) {
+                window.raise();
+                window._tilingOriginalZone = currentZone;
+            }
+        } else {
+            // For any other operation (like resizing), set the bypass flag.
+            // This prevents _onGrabOpEnd from trying to re-snap the window.
+            window._tilingBypass = true;
         }
     }
 
