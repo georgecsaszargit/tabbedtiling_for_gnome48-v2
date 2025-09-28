@@ -112,7 +112,7 @@ function saveConfig(cfg) {
 /**
  * ZoneEditorRow
  * Expandable row to edit a single zone.
- * Zone fields: name, monitorIndex, x, y, width, height, gap, isPrimary
+ * Zone fields: name, monitorIndex, x, y, width, height, gaps{top,right,bottom,left}, isPrimary
  */
 const ZoneEditorRow = GObject.registerClass(
 class ZoneEditorRow extends Adw.ExpanderRow {
@@ -124,6 +124,22 @@ class ZoneEditorRow extends Adw.ExpanderRow {
         });
 
         this._onRemove = onRemove;
+        // Normalize legacy 'gap' into per-side gaps if present
+        const legacyGap = (zoneData?.gap ?? null);
+        const normGaps = (zoneData?.gaps && typeof zoneData.gaps === 'object')
+            ? {
+                top: Number(zoneData.gaps.top ?? 8),
+                right: Number(zoneData.gaps.right ?? 8),
+                bottom: Number(zoneData.gaps.bottom ?? 8),
+                left: Number(zoneData.gaps.left ?? 8),
+              }
+            : {
+                top: Number(legacyGap ?? 8),
+                right: Number(legacyGap ?? 8),
+                bottom: Number(legacyGap ?? 8),
+                left: Number(legacyGap ?? 8),
+              };
+
         this._zone = {
             name: zoneData?.name ?? '',
             monitorIndex: zoneData?.monitorIndex ?? 0,
@@ -131,7 +147,7 @@ class ZoneEditorRow extends Adw.ExpanderRow {
             y: zoneData?.y ?? 0,
             width: zoneData?.width ?? 0,
             height: zoneData?.height ?? 0,
-            gap: zoneData?.gap ?? 0,
+            gaps: normGaps,
             isPrimary: zoneData?.isPrimary ?? false,
         };
 
@@ -170,7 +186,13 @@ class ZoneEditorRow extends Adw.ExpanderRow {
 
         const labeledSwitch = (label, initial, onChanged) => {
             const row = new Adw.ActionRow({ title: label });
-            const sw = new Gtk.Switch({ active: initial, halign: Gtk.Align.END });
+            const sw = new Gtk.Switch({
+                active: initial,
+                halign: Gtk.Align.END,
+                valign: Gtk.Align.CENTER,
+                hexpand: false,
+                vexpand: false,
+            });
             sw.connect('state-set', (_w, state) => {
                 onChanged(state);
                 return false; // allow default
@@ -203,13 +225,22 @@ class ZoneEditorRow extends Adw.ExpanderRow {
         const [hRow, hSpin] = labeledSpin(_('Height'), this._zone.height, 0, 100000, 1, (v) => { this._zone.height = v; this._refreshSubtitle(); });
         grid.attach(hRow, 0, 5, 1, 1);
 
-        // Gap
-        const [gapRow, gapSpin] = labeledSpin(_('Gap'), this._zone.gap, 0, 256, 1, (v) => { this._zone.gap = v; });
-        grid.attach(gapRow, 0, 6, 1, 1);
+        // Per-side Gaps
+        const [gapTopRow, gapTopSpin] = labeledSpin(_('Gap Top'), this._zone.gaps.top, 0, 256, 1, (v) => { this._zone.gaps.top = v; });
+        grid.attach(gapTopRow, 0, 6, 1, 1);
+        const [gapRightRow, gapRightSpin] = labeledSpin(_('Gap Right'), this._zone.gaps.right, 0, 256, 1, (v) => { this._zone.gaps.right = v; });
+        grid.attach(gapRightRow, 0, 7, 1, 1);
+        const [gapBottomRow, gapBottomSpin] = labeledSpin(_('Gap Bottom'), this._zone.gaps.bottom, 0, 256, 1, (v) => { this._zone.gaps.bottom = v; });
+        grid.attach(gapBottomRow, 0, 8, 1, 1);
+        const [gapLeftRow, gapLeftSpin] = labeledSpin(_('Gap Left'), this._zone.gaps.left, 0, 256, 1, (v) => { this._zone.gaps.left = v; });
+        grid.attach(gapLeftRow, 0, 9, 1, 1);
 
-        // isPrimary
+        // isPrimary — place AFTER per-side gaps, at the end of the editor
         const [primRow, primSwitch] = labeledSwitch(_('Primary Zone'), this._zone.isPrimary, (v) => { this._zone.isPrimary = v; });
-        grid.attach(primRow, 0, 7, 1, 1);
+        primRow.set_margin_top(6);
+        // Current rows occupy 0..9 after adding Gap Top/Right/Bottom/Left.
+        // Attach Primary Zone on the next free row index to ensure it appears at the end.
+        grid.attach(primRow, 0, 10, 1, 1);
     }
 
     _refreshSubtitle() {
@@ -217,7 +248,9 @@ class ZoneEditorRow extends Adw.ExpanderRow {
     }
 
     getZone() {
-        return { ...this._zone };
+        // Ensure legacy 'gap' is not written back; only persist 'gaps'
+        const { name, monitorIndex, x, y, width, height, gaps, isPrimary } = this._zone;
+        return { name, monitorIndex, x, y, width, height, gaps, isPrimary };
     }
 });
 
@@ -350,7 +383,9 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                 const zoneData = {
                     name: `Monitor ${monitorIndex} Zone ${i + 1}`,
                     monitorIndex, x: startX + (i * zoneWidth), y: startY,
-                    width: zoneWidth, height: zoneHeight, gap: 8, isPrimary: (i === 0),
+                    width: zoneWidth, height: zoneHeight,
+                    gaps: { top: 8, right: 8, bottom: 8, left: 8 },
+                    isPrimary: (i === 0),
                 };
                 this._addZoneRow(zoneData, zonesGroup);
             }
@@ -548,7 +583,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             name: '',
             monitorIndex: 0,
             x: 0, y: 0, width: 800, height: 600,
-            gap: 8,
+            gaps: { top: 8, right: 8, bottom: 8, left: 8 },
             isPrimary: false,
         };
 

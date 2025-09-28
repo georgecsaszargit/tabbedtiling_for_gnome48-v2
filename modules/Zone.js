@@ -44,14 +44,25 @@ export class Zone {
         };
     }
 
+    _getGaps() {
+        // Normalize gaps from config:
+        // prefer this.gaps{top,right,bottom,left}; fall back to legacy numeric this.gap; else zeros
+        const g = this.gaps && typeof this.gaps === 'object' ? this.gaps : null;
+        const legacy = (typeof this.gap === 'number') ? this.gap : 0;
+        return {
+            top: Number(g?.top ?? legacy ?? 0),
+            right: Number(g?.right ?? legacy ?? 0),
+            bottom: Number(g?.bottom ?? legacy ?? 0),
+            left: Number(g?.left ?? legacy ?? 0),
+        };
+    }
+
     _updateTabBarPosition() {
         if (!this.rect) return;
         const tabBarHeight = this._tabBar.height;
-        this._tabBar.set_position(
-            this.rect.x + this.gap,
-            this.rect.y + this.gap
-        );
-        this._tabBar.set_size(this.rect.width - (2 * this.gap), tabBarHeight);
+        const { top, right, left } = this._getGaps();
+        this._tabBar.set_position(this.rect.x + left, this.rect.y + top);
+        this._tabBar.set_size(this.rect.width - (left + right), tabBarHeight);
     }
 
     _ensureUntiled(window) {
@@ -131,10 +142,11 @@ export class Zone {
         this._ensureUntiled(window);
 
         const tabBarHeight = this._tabBar.height;
-        const newX = this.rect.x + this.gap;
-        const newY = this.rect.y + this.gap + tabBarHeight; // Position window below tab bar
-        let newWidth = this.rect.width - (2 * this.gap);
-        let newHeight = this.rect.height - (2 * this.gap) - tabBarHeight;
+        const { top, right, bottom, left } = this._getGaps();
+        const newX = this.rect.x + left;
+        const newY = this.rect.y + top + tabBarHeight; // window below tab bar
+        let newWidth = this.rect.width - (left + right);
+        let newHeight = this.rect.height - (top + bottom) - tabBarHeight;
 
         // Respect client resize increments when applicable (e.g., terminals).
         // This prevents Mutter from ignoring our move/resize when sizes are invalid.
