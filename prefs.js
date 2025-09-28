@@ -50,6 +50,15 @@ function defaultConfig() {
             sortingCriteria: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
             sortingOrder: 'ASC', // 'ASC', 'DESC'                    
         },
+        // NEW: persisted defaults for the Zone Generator UI
+        zoneGenerator: {
+            monitorIndex: 0,
+            resW: 1920,
+            resH: 1080,
+            startX: 0,
+            startY: 0,
+            numZones: 2,
+        },        
     };
 }
 
@@ -258,6 +267,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         Adw.init();
 
         const cfg = loadConfig();
+        const genDefaults = { ...defaultConfig().zoneGenerator, ...(cfg.zoneGenerator ?? {}) };
 
         const page = new Adw.PreferencesPage();
         window.add(page);
@@ -269,12 +279,12 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         });
         page.add(generatorGroup);
 
-        const monSpin = this._createSpinRow(generatorGroup, _('Monitor Index'), 0, 0, 16, 1);
-        const resWSpin = this._createSpinRow(generatorGroup, _('Monitor Resolution Width'), 1920, 0, 10000, 1);
-        const resHSpin = this._createSpinRow(generatorGroup, _('Monitor Resolution Height'), 1080, 0, 10000, 1);
-        const xSpin = this._createSpinRow(generatorGroup, _('Start X Coordinate'), 0, 0, 10000, 1);
-        const ySpin = this._createSpinRow(generatorGroup, _('Start Y Coordinate'), 0, 0, 10000, 1);
-        const numZonesSpin = this._createSpinRow(generatorGroup, _('Number of Zones'), 2, 1, 16, 1);
+        const monSpin      = this._createSpinRow(generatorGroup, _('Monitor Index'),               genDefaults.monitorIndex, 0, 16,   1);
+        const resWSpin     = this._createSpinRow(generatorGroup, _('Monitor Resolution Width'),   genDefaults.resW,         0, 10000, 1);
+        const resHSpin     = this._createSpinRow(generatorGroup, _('Monitor Resolution Height'),  genDefaults.resH,         0, 10000, 1);
+        const xSpin        = this._createSpinRow(generatorGroup, _('Start X Coordinate'),         genDefaults.startX,       0, 10000, 1);
+        const ySpin        = this._createSpinRow(generatorGroup, _('Start Y Coordinate'),         genDefaults.startY,       0, 10000, 1);
+        const numZonesSpin = this._createSpinRow(generatorGroup, _('Number of Zones'),            genDefaults.numZones,     1, 16,    1);
 
         const genRow = new Adw.ActionRow();
         const genBtn = new Gtk.Button({ label: _('Generate Zones'), halign: Gtk.Align.CENTER });
@@ -307,6 +317,17 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             const startY = ySpin.get_value_as_int();
             const numZones = numZonesSpin.get_value_as_int();
 
+            // NEW: persist the latest generator inputs immediately
+            cfg.zoneGenerator = {
+                monitorIndex,
+                resW,
+                resH,
+                startX,
+                startY,
+                numZones,
+            };
+            saveConfig(cfg);            
+
             // Remove existing zones for this monitor
             const rowsToRemove = this._zoneRows.filter(r => r.getZone().monitorIndex === monitorIndex);
             rowsToRemove.forEach(r => {
@@ -333,7 +354,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                 };
                 this._addZoneRow(zoneData, zonesGroup);
             }
-            this._toast(window, _(`Generated ${numZones} zones for monitor ${monitorIndex}.`));
+            this._toast(window, _(`Generated ${numZones} zones for monitor ${monitorIndex} (defaults saved).`));
         });
 
         // --- Tab Appearance Group ---
@@ -570,7 +591,9 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         // Basic validation: drop zones with non-positive size
         const saneZones = zones.filter(z => (z.width > 0 && z.height > 0));
 
-        return { zones: saneZones, tabBar };
+        // Preserve previously saved generator defaults
+        const zoneGenerator = { ...(existingCfg.zoneGenerator ?? defaultConfig().zoneGenerator) };
+        return { zones: saneZones, tabBar, zoneGenerator };
     }
 
     _toast(window, text) {

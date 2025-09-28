@@ -47,7 +47,16 @@ export class ConfigManager {
             closeButtonSize: 12,
             sortingCriteria: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
             sortingOrder: 'ASC', // 'ASC', 'DESC'            
-			}
+            },
+            // NEW: persisted defaults for the Zone Generator UI
+            zoneGenerator: {
+                monitorIndex: 0,
+                resW: 1920,
+                resH: 1080,
+                startX: 0,
+                startY: 0,
+                numZones: 2,
+            },
         };
     }
 
