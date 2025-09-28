@@ -26,16 +26,16 @@ export class Highlighter {
         return actor;
     }
 
-    showHoverHighlight(zone) {
+    showHoverHighlight(rect) {
         if (!this._hoverHighlight) {
             this._hoverHighlight = this._createHighlightActor('zone-highlight');
         }
 
-        const monitor = Main.layoutManager.monitors[zone.monitorIndex];
+        const monitor = Main.layoutManager.monitors[rect.monitorIndex];
         if (!monitor) return;
 
-        this._hoverHighlight.set_position(monitor.x + zone.x, monitor.y + zone.y);
-        this._hoverHighlight.set_size(zone.width, zone.height);
+        this._hoverHighlight.set_position(monitor.x + rect.x, monitor.y + rect.y);
+        this._hoverHighlight.set_size(rect.width, rect.height);
         this._hoverHighlight.show();
     }
 

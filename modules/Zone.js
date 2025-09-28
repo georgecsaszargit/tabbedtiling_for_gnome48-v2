@@ -231,13 +231,14 @@ export class Zone {
         this._updateVisibility();
     }
 
-    /**
+	/**
      * Safely re-applies snap constraints to a window.
      * This is intended to be called after a state change (like un-maximizing)
      * has settled, to restore the window to its correct zone position.
      */
     restoreSnap(window) {
         if (this._snappedWindows.has(window)) {
+            // The guard clause in snapWindow is still important
             this.snapWindow(window);
         }
     }

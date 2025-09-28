@@ -248,8 +248,30 @@ export class WindowManager {
             return;
         }
         const zone = this._findZoneAt(x, y) ?? this._findNearestZoneWithinThreshold(x, y, 48);
-        if (zone) this._highlighter.showHoverHighlight(zone);
-        else this._highlighter.hideHoverHighlight();
+        if (zone) {
+            // Get the tab bar height from the configuration to calculate the correct highlight area.
+            const config = this._configManager.getConfig();
+            const tabBarHeight = config.tabBar?.height ?? 32; // Use optional chaining and a fallback.
+
+            // The highlight should only cover the area *below* the tab bar.
+            const highlightHeight = zone.height - tabBarHeight;
+
+            // Only show the highlight if there's actual space for it.
+            if (highlightHeight > 0) {
+                const highlightRect = {
+                    monitorIndex: zone.monitorIndex,
+                    x: zone.x,
+                    y: zone.y + tabBarHeight, // Shift the highlight down.
+                    width: zone.width,
+                    height: highlightHeight,   // Make the highlight shorter.
+                };
+                this._highlighter.showHoverHighlight(highlightRect);
+            } else {
+                this._highlighter.hideHoverHighlight();
+            }
+        } else {
+            this._highlighter.hideHoverHighlight();
+        }
     }
 
     _isSnappable(window) {
