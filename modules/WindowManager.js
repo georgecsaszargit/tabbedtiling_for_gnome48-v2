@@ -18,15 +18,18 @@ export class WindowManager {
         this._zones = [];
         this._signalConnections = [];
         this._windowTracker = Shell.WindowTracker.get_default();
-        this._windowStateSignals = new Map();        
+        // Track per-window state change handlers so we can disconnect safely
+        this._windowStateSignals = new Map();
         this._loginProxy = null;
+        // Hover polling while dragging (since MetaDisplay lacks grab-op-motion)
+        this._dragHoverTimerId = 0;
     }
 
     enable() {
         log("DEBUG: enable() called.");
         this.reloadConfiguration();
         this._connectSignals();
-        this._updateAllZonesVisibility();        
+        this._updateAllZonesVisibility();
         this._snapExistingWindows();
     }
 
@@ -50,7 +53,7 @@ export class WindowManager {
         });
 
         log(`Loaded ${this._zones.length} zones.`);
-        this._updateAllZonesVisibility();        
+        this._updateAllZonesVisibility();
         this._snapExistingWindows();
     }
 
@@ -130,35 +133,79 @@ export class WindowManager {
         this._signalConnections = [];
         this._loginProxy = null;
         this._disconnectWindowStateSignals();
+        this._stopDragHoverTimer();
     }
 
+    /**
+     * Tracks state changes for a window (maximize, fullscreen) to manage tab bar visibility
+     * and re-snap behavior. This is the definitive, race-condition-safe implementation.
+     */
     _trackWindowState(window) {
         if (!window || this._windowStateSignals.has(window)) {
             return;
         }
 
-        const onStateChanged = () => {
-            // When a window returns to a normal state, re-snap it if it belongs to a zone.
-            if (!window.get_maximized() && !window.is_fullscreen()) {
-                const zone = this._findZoneForWindow(window);
-                if (zone) {
-                    zone.snapWindow(window);
+        // The 'actor' is the actual visual object on the screen. This is what we need to watch.
+        const actor = window.get_compositor_private();
+        if (!actor) {
+            return; // Cannot track if there is no actor
+        }
+
+        let checkQueued = false; // A flag to prevent the handler from running too many times during a resize.
+
+        const onAllocationChanged = () => {
+            // If a check is already scheduled for the next idle moment, don't queue another.
+            if (checkQueued) return;
+            checkQueued = true;
+
+            // Use GLib.idle_add. This is the crucial part. It waits until Mutter has
+            // completely finished its current drawing and layout cycle before we run our code.
+            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                checkQueued = false; // Allow the next allocation change to queue a new check.
+
+                // Ensure the window wasn't destroyed while we were waiting.
+                if (!window || window.get_display() === null) {
+                    return GLib.SOURCE_REMOVE;
                 }
-            }
-            // Always update all tab bar visibilities.
-            this._updateAllZonesVisibility();
+
+                // Step 1: Always, always update the visibility of tab bars first.
+                this._updateAllZonesVisibility();
+
+                // Step 2: Now that the UI is correct, check if the window is back to a normal state.
+                const isMaximized = window.get_maximized() !== Meta.MaximizeFlags.NONE;
+                const isFullscreen = window.is_fullscreen();
+
+                // Step 3: If it's normal, it is now 100% safe to restore its snapped position.
+                if (!isMaximized && !isFullscreen) {
+                    const zone = this._findZoneForWindow(window);
+                    if (zone) {
+                        zone.restoreSnap(window);
+                    }
+                }
+                
+                return GLib.SOURCE_REMOVE; // This idle task is done.
+            });
         };
 
         const ids = [
-            window.connect('notify::maximized-horizontally', onStateChanged),
-            window.connect('notify::fullscreen', onStateChanged),
+            // The CORRECTED signal: listen to the actor's allocation, not the window's properties.
+            actor.connect('notify::allocation', onAllocationChanged),
+            // We still need to clean up when the window is closed.
+            window.connect('unmanaged', () => this._untrackWindowState(window))
         ];
+
         this._windowStateSignals.set(window, ids);
     }
 
     _untrackWindowState(window) {
         if (this._windowStateSignals.has(window)) {
-            this._windowStateSignals.get(window).forEach(id => window.disconnect(id));
+            this._windowStateSignals.get(window).forEach(id => {
+                try {
+                    if (window.is_remote() === false) { // Check if the window object is still valid
+                         window.disconnect(id);
+                    }
+                } catch (e) { /* ignore errors on already destroyed objects */ }
+            });
             this._windowStateSignals.delete(window);
         }
     }
@@ -166,10 +213,43 @@ export class WindowManager {
     _disconnectWindowStateSignals() {
         this._windowStateSignals.forEach((ids, window) => {
             ids.forEach(id => {
-                try { window.disconnect(id); } catch (e) { /* ignore */ }
+                try {
+                    if (window.is_remote() === false) {
+                        window.disconnect(id);
+                    }
+                } catch (e) { /* ignore */ }
             });
         });
-        this._windowStateSignals.clear();        
+        this._windowStateSignals.clear();
+    }
+
+    _startDragHoverTimer() {
+        if (this._dragHoverTimerId) return;
+        // ~60fps polling (about 16ms). Cheap and reliable on both X11/Wayland.
+        this._dragHoverTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            this._updateHoverHighlightFromPointer();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopDragHoverTimer() {
+        if (this._dragHoverTimerId) {
+            GLib.Source.remove(this._dragHoverTimerId);
+            this._dragHoverTimerId = 0;
+        }
+        this._highlighter.hideHoverHighlight();
+    }
+
+    _updateHoverHighlightFromPointer() {
+        const [x, y, mods] = global.get_pointer();
+        // If Ctrl is held, or we don't currently have a snappable drag, hide highlight.
+        if ((mods & Clutter.ModifierType.CONTROL_MASK) !== 0) {
+            this._highlighter.hideHoverHighlight();
+            return;
+        }
+        const zone = this._findZoneAt(x, y) ?? this._findNearestZoneWithinThreshold(x, y, 48);
+        if (zone) this._highlighter.showHoverHighlight(zone);
+        else this._highlighter.hideHoverHighlight();
     }
 
     _isSnappable(window) {
@@ -185,6 +265,9 @@ export class WindowManager {
         const [, , mods] = global.get_pointer();
         if ((mods & Clutter.ModifierType.CONTROL_MASK) !== 0) {
             window._tilingBypass = true;
+            // Ensure any hover highlight is hidden while bypassing
+            this._highlighter.hideHoverHighlight();
+            this._stopDragHoverTimer();
             return;
         }
         delete window._tilingBypass; // Clear it if CTRL isn't held
@@ -196,10 +279,13 @@ export class WindowManager {
                 window.raise();
                 window._tilingOriginalZone = currentZone;
             }
+            // Begin hover polling for live zone highlight
+            this._startDragHoverTimer();
         } else {
             // For any other operation (like resizing), set the bypass flag.
             // This prevents _onGrabOpEnd from trying to re-snap the window.
             window._tilingBypass = true;
+            this._stopDragHoverTimer();
         }
     }
 
@@ -251,7 +337,7 @@ export class WindowManager {
         }
 
         if (!this._isSnappable(window)) return;
-
+        this._stopDragHoverTimer();
         this._highlighter.hideHoverHighlight();
 
         const [pointerX, pointerY] = global.get_pointer();
@@ -306,6 +392,7 @@ export class WindowManager {
         });
     }
 
+    // Re-run per monitor when tracked windows list changes (e.g., window closed)
     _onTrackedWindowsChanged() {
         const currentWindows = new Set(global.get_window_actors().map(a => a.get_meta_window()));
         const previouslyTracked = new Set(this._windowStateSignals.keys());
@@ -335,21 +422,25 @@ export class WindowManager {
         const allWindows = global.get_window_actors().map(a => a.get_meta_window());
         const monitorsWithMaximizedWindows = new Set();
         allWindows.forEach(win => {
-            if (win.get_maximized() || win.is_fullscreen()) {
+            if ((win.get_maximized && win.get_maximized()) || (win.is_fullscreen && win.is_fullscreen())) {
                 monitorsWithMaximizedWindows.add(win.get_monitor());
             }
         });
-
-        for (const zone of this._zones) {
-            zone.setForceHidden(monitorsWithMaximizedWindows.has(zone.monitorIndex));
+        const monitors = Main.layoutManager.monitors || [];
+        for (let i = 0; i < monitors.length; i++) {
+            const shouldHide = monitorsWithMaximizedWindows.has(i);
+            this._zones.forEach(zone => {
+                if (zone.monitorIndex === i) {
+                    zone.setForceHidden(shouldHide);
+                }
+            });
         }
     }
 
     _snapExistingWindows() {
-        log("DEBUG: _snapExistingWindows() called.");
         const allWindows = global.get_window_actors().map(a => a.get_meta_window());
         allWindows.forEach(window => {
-            this._trackWindowState(window);        
+            this._trackWindowState(window);
             if (this._isSnappable(window)) {
                 let targetZone = this._findZoneForWindow(window);
 
@@ -362,9 +453,8 @@ export class WindowManager {
                 }
             }
         });
-        this._updateAllZonesVisibility();        
+        this._updateAllZonesVisibility();
         this._zones.forEach(zone => zone.reorderTabs());
-        this._logZoneStates();
     }
 
     _logZoneStates() {

@@ -2,6 +2,7 @@
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Meta from 'gi://Meta';
 import GLib from 'gi://GLib';
+import Clutter from 'gi://Clutter';
 
 import { TabBar } from './TabBar.js';
 
@@ -16,10 +17,10 @@ export class Zone {
         this._windowTracker = windowTracker;
         // Minimal MRU tracking: most-recently activated window first
         this._history = [];
-        this._activeWindow = null;      
+        this._activeWindow = null;
+        // Allow monitor-wide “force hide” of tab bar during max/fullscreen
+        this._forceHidden = false; 
         
-        this._forceHidden = false; // NEW: for fullscreen/maximized handling          
-
         this._tabBar = new TabBar(tabBarConfig);
         this._tabBar.connect('tab-clicked', (actor, window) => this.activateWindow(window));
         // When the close button on a tab is clicked, the 'tab-removed' signal is emitted.
@@ -33,6 +34,21 @@ export class Zone {
 
         this._updateTabBarPosition();
         Main.layoutManager.addChrome(this._tabBar);
+    }
+
+    setTabBarVisible(visible) {
+        // Called by WindowManager to hide ALL tab bars on a monitor while
+        // a snapped window is maximized/fullscreen.
+        // Respect _forceHidden as an override (can be toggled by WindowManager if used).
+        if (this._forceHidden) {
+            this._tabBar.hide();
+            return;
+        }
+        if (visible) {
+            this._tabBar.show();
+        } else {
+            this._tabBar.hide();
+        }
     }
 
     get monitor() {
@@ -74,7 +90,8 @@ export class Zone {
         // Some apps (including GNOME Terminal) can be in a "tiled" state.
         // Just unmaximizing is not always enough; explicitly clear tiling.
         try {
-            if (window.get_maximized()) {
+            const maxFlags = (typeof window.get_maximized === 'function') ? window.get_maximized() : Meta.MaximizeFlags.NONE;
+            if (maxFlags !== Meta.MaximizeFlags.NONE) {
                 window.unmaximize(Meta.MaximizeFlags.BOTH);
             }
             if (typeof window.get_tile_type === 'function' &&
@@ -96,7 +113,7 @@ export class Zone {
             return GLib.SOURCE_REMOVE;
         });
     }
-
+   
     /**
      * Try to respect WM_NORMAL_HINTS resize increments for apps like GNOME Terminal.
      * There isn't a stable public GJS API to read the raw size hints directly,
@@ -141,6 +158,12 @@ export class Zone {
     }
 
     snapWindow(window) {
+        // GUARD: Never attempt to snap a window that is already maximized or fullscreen.
+        // This prevents a race condition where the maximize signal is caught, but another
+        // process tries to re-snap the window before its state is fully settled.
+		if ((window.get_maximized && window.get_maximized()) || (window.is_fullscreen && window.is_fullscreen())) {
+	        return;
+	    }
         if (!this.rect) return;
 
         // Ensure not maximized/tiled before attempting to move.
@@ -162,6 +185,7 @@ export class Zone {
         // Perform a two-step move+resize to coax stubborn clients (e.g., GNOME Terminal).
         this._twoStepMoveResize(window, newX, newY, newWidth, newHeight);
         // Final belt-and-suspenders attempt with user_op=false in case the WM treats it differently.
+        // (Keeps behavior you added later in the file.)        
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
             try {
                 window.move_resize_frame(false, newX, newY, newWidth, newHeight);
@@ -172,7 +196,7 @@ export class Zone {
         if (!this._snappedWindows.has(window)) {
             this._snappedWindows.add(window);
             window._tilingZoneId = this.name; // Tag the window
-            this._tabBar.addTab(window);
+            this._tabBar.addTab(window); 
         }
 
         this.activateWindow(window);
@@ -207,6 +231,17 @@ export class Zone {
         this._updateVisibility();
     }
 
+    /**
+     * Safely re-applies snap constraints to a window.
+     * This is intended to be called after a state change (like un-maximizing)
+     * has settled, to restore the window to its correct zone position.
+     */
+    restoreSnap(window) {
+        if (this._snappedWindows.has(window)) {
+            this.snapWindow(window);
+        }
+    }
+
     activateWindow(window) {
         if (this._snappedWindows.has(window)) {
             window.activate(global.get_current_time());
@@ -235,9 +270,10 @@ export class Zone {
     _updateVisibility() {
         const hasWindows = this._snappedWindows.size > 0;
         const shouldBeVisible = hasWindows && !this._forceHidden;
-        if (this._tabBar.visible !== shouldBeVisible) {
-            this._tabBar.visible = shouldBeVisible;
-        }
+        if (shouldBeVisible)
+            this._tabBar.show();
+        else
+            this._tabBar.hide();
     }
 
     reorderTabs() {

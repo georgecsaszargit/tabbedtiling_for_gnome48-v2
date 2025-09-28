@@ -1442,6 +1442,10 @@ export class Highlighter {
     destroyPreviews() {
         this._previewHighlights.forEach(actor => actor.destroy());
         this._previewHighlights = [];
+        if (this._previewTimeoutId) {
+            GLib.Source.remove(this._previewTimeoutId);
+            this._previewTimeoutId = 0;
+        }        
     }
 
     destroy() {
@@ -1476,13 +1480,19 @@ export class WindowManager {
         this._zones = [];
         this._signalConnections = [];
         this._windowTracker = Shell.WindowTracker.get_default();
+        // Track per-window state change handlers so we can disconnect safely
+        this._windowStateHandlers = new Map(); // Meta.Window -> { ids: number[] }        
+        this._windowStateSignals = new Map();        
         this._loginProxy = null;
+        // Hover polling while dragging (since MetaDisplay lacks grab-op-motion)
+        this._dragHoverTimerId = 0;        
     }
 
     enable() {
         log("DEBUG: enable() called.");
         this.reloadConfiguration();
         this._connectSignals();
+        this._updateAllZonesVisibility();        
         this._snapExistingWindows();
     }
 
@@ -1506,6 +1516,7 @@ export class WindowManager {
         });
 
         log(`Loaded ${this._zones.length} zones.`);
+        this._updateAllZonesVisibility();        
         this._snapExistingWindows();
     }
 
@@ -1584,6 +1595,110 @@ export class WindowManager {
         });
         this._signalConnections = [];
         this._loginProxy = null;
+        this._disconnectWindowStateSignals();
+        this._stopDragHoverTimer();        
+    }
+
+    _trackWindowState(window) {
+        if (!window || this._windowStateSignals.has(window)) {
+            return;
+        }
+
+        const onStateChanged = () => {
+            // get_maximized() is a bitmask; consider "normal" when it's NONE and not fullscreen.
+            const maxFlags = (typeof window.get_maximized === 'function') ? window.get_maximized() : Meta.MaximizeFlags.NONE;
+            const isFs     = (typeof window.is_fullscreen === 'function') ? window.is_fullscreen() : false;
+            
+            if (maxFlags === Meta.MaximizeFlags.NONE && !isFs) {
+                const zone = this._findZoneForWindow(window);
+                if (zone) {
+                    zone.snapWindow(window);
+                }
+            }
+            // Always update tab bar visibilities (snapped windows only).
+            this._updateAllZonesVisibility();
+        };
+
+        const ids = [];
+        try { ids.push(window.connect('notify::maximized', onStateChanged)); } catch (_) {}
+        // X11 (MetaWindowX11) does NOT have 'fullscreen-changed'; rely on property notify
+        try { ids.push(window.connect('notify::fullscreen', onStateChanged)); } catch (_) {}
+        this._windowStateSignals.set(window, ids);
+    }
+
+    _untrackWindowState(window) {
+        if (this._windowStateSignals.has(window)) {
+            this._windowStateSignals.get(window).forEach(id => window.disconnect(id));
+            this._windowStateSignals.delete(window);
+        }
+    }
+
+    _disconnectWindowStateSignals() {
+        this._windowStateSignals.forEach((ids, window) => {
+            ids.forEach(id => {
+                try { window.disconnect(id); } catch (e) { /* ignore */ }
+            });
+        });
+        this._windowStateSignals.clear();        
+    }
+
+    _startDragHoverTimer() {
+        if (this._dragHoverTimerId) return;
+        // ~60fps polling (about 16ms). Cheap and reliable on both X11/Wayland.
+        this._dragHoverTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+            this._updateHoverHighlightFromPointer();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopDragHoverTimer() {
+        if (this._dragHoverTimerId) {
+            GLib.Source.remove(this._dragHoverTimerId);
+            this._dragHoverTimerId = 0;
+        }
+        this._highlighter.hideHoverHighlight();
+    }
+
+    _updateHoverHighlightFromPointer() {
+        const [x, y, mods] = global.get_pointer();
+        // If Ctrl is held, or we don't currently have a snappable drag, hide highlight.
+        if ((mods & Clutter.ModifierType.CONTROL_MASK) !== 0) {
+            this._highlighter.hideHoverHighlight();
+            return;
+        }
+        const zone = this._findZoneAt(x, y) ?? this._findNearestZoneWithinThreshold(x, y, 48);
+        if (zone) this._highlighter.showHoverHighlight(zone);
+        else this._highlighter.hideHoverHighlight();
+    }
+
+	 _watchWindowState(window) {
+        if (!window || this._windowStateHandlers.has(window))
+            return;
+
+        const ids = [];
+        // Maximize changes (property is a bitmask)
+        try { ids.push(window.connect('notify::maximized', () => this._onWindowStateChanged(window))); } catch (_) {}
+        // Use property notification for fullscreen on both Wayland and X11.
+        try { ids.push(window.connect('notify::fullscreen', () => this._onWindowStateChanged(window))); } catch (_) {}
+        // Cleanup when window goes away
+        ids.push(window.connect('unmanaged', () => this._unwatchWindowState(window)));
+
+        this._windowStateHandlers.set(window, { ids });
+    }
+
+    _unwatchWindowState(window) {
+        const entry = this._windowStateHandlers.get(window);
+        if (!entry) return;
+        for (const id of entry.ids) {
+            try { window.disconnect(id); } catch (_) {}
+        }
+        this._windowStateHandlers.delete(window);
+        // Recompute visibility in case this was the last maximized on its monitor
+        this._recomputeMonitorTabBars(window?.get_monitor?.());
+    }
+
+    _onWindowStateChanged(window) {
+        this._recomputeMonitorTabBars(window ? window.get_monitor() : -1);
     }
 
     _isSnappable(window) {
@@ -1594,18 +1709,33 @@ export class WindowManager {
 
     _onGrabOpBegin(display, window, op) {
         if (!this._isSnappable(window)) return;
-        const currentZone = this._findZoneForWindow(window);
 
+        // Bypass tiling logic if holding CTRL
         const [, , mods] = global.get_pointer();
         if ((mods & Clutter.ModifierType.CONTROL_MASK) !== 0) {
             window._tilingBypass = true;
+            // Ensure any hover highlight is hidden while bypassing
+            this._highlighter.hideHoverHighlight();        
+            this._highlighter.hideHoverHighlight();
+            this._stopDragHoverTimer();                
             return;
         }
-        delete window._tilingBypass;
+        delete window._tilingBypass; // Clear it if CTRL isn't held
 
-        if (currentZone) {
-            window.raise();
-            window._tilingOriginalZone = currentZone;
+        // ONLY apply moving logic for MOVING ops. For RESIZING, we do nothing.
+        if (op === Meta.GrabOp.MOVING) {
+            const currentZone = this._findZoneForWindow(window);
+            if (currentZone) {
+                window.raise();
+                window._tilingOriginalZone = currentZone;
+            }
+            // Begin hover polling for live zone highlight
+            this._startDragHoverTimer();            
+        } else {
+            // For any other operation (like resizing), set the bypass flag.
+            // This prevents _onGrabOpEnd from trying to re-snap the window.
+            window._tilingBypass = true;
+            this._stopDragHoverTimer();            
         }
     }
 
@@ -1657,7 +1787,7 @@ export class WindowManager {
         }
 
         if (!this._isSnappable(window)) return;
-
+        this._stopDragHoverTimer();
         this._highlighter.hideHoverHighlight();
 
         const [pointerX, pointerY] = global.get_pointer();
@@ -1698,8 +1828,10 @@ export class WindowManager {
     _onWindowCreated(display, window) {
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
             if (!window || !this._isSnappable(window)) return GLib.SOURCE_REMOVE;
-
+            this._trackWindowState(window); // Track state changes (maximized, etc.)
             const monitorIndex = window.get_monitor();
+            // Track state so we can hide tab bars when this snapped window goes max/fullscreen
+            this._watchWindowState(window);            
             const primaryZone = this._zones.find(z =>
                 z.monitorIndex === monitorIndex && z.isPrimary
             );
@@ -1712,16 +1844,44 @@ export class WindowManager {
         });
     }
 
+    // Re-run per monitor when tracked windows list changes (e.g., window closed)
     _onTrackedWindowsChanged() {
-        const trackedWindows = new Set(global.get_window_actors().map(a => a.get_meta_window()));
+        const currentWindows = new Set(global.get_window_actors().map(a => a.get_meta_window()));
+        const previouslyTracked = new Set(this._windowStateSignals.keys());
 
-        for (const zone of this._zones) {
-            const snappedWindows = zone.getSnappedWindows();
-            for (const window of snappedWindows) {
-                if (!trackedWindows.has(window)) {
+        // Untrack closed windows and remove them from zones
+        for (const window of previouslyTracked) {
+            if (!currentWindows.has(window)) {
+                this._untrackWindowState(window);
+                const zone = this._findZoneForWindow(window);
+                if (zone) {
                     log(`Window "${window.get_title()}" is no longer tracked, removing from zone "${zone.name}".`);
                     zone.unsnapWindow(window);
+                    this._unwatchWindowState(window);                    
                 }
+            }
+        // Recompute once after processing removals
+        this._recomputeAllMonitors();
+        }
+
+        // Track new windows
+        for (const window of currentWindows) {
+            if (!previouslyTracked.has(window)) {
+                this._trackWindowState(window);
+            }
+        }
+        this._updateAllZonesVisibility();
+    }
+
+    _updateAllZonesVisibility() {
+        // Hide tab bars per monitor only if any **snapped** window there is max/fullscreen.
+        const monitors = Main.layoutManager.monitors || [];
+        for (let i = 0; i < monitors.length; i++) {
+            const shouldHide = this._anySnappedWindowMaxOrFsOnMonitor(i);
+            // Use the Zone force-hide path so bar state is consistent everywhere.
+            for (const zone of this._zones) {
+                if (zone.monitorIndex === i)
+                    zone.setForceHidden(shouldHide);
             }
         }
     }
@@ -1730,6 +1890,7 @@ export class WindowManager {
         log("DEBUG: _snapExistingWindows() called.");
         const allWindows = global.get_window_actors().map(a => a.get_meta_window());
         allWindows.forEach(window => {
+            this._trackWindowState(window);        
             if (this._isSnappable(window)) {
                 let targetZone = this._findZoneForWindow(window);
 
@@ -1739,11 +1900,54 @@ export class WindowManager {
 
                 if (targetZone) {
                     targetZone.snapWindow(window);
+                    this._watchWindowState(window);                    
                 }
             }
         });
+        this._updateAllZonesVisibility();        
         this._zones.forEach(zone => zone.reorderTabs());
         this._logZoneStates();
+    }
+
+    _anySnappedWindowMaxOrFsOnMonitor(monitorIndex) {
+        for (const zone of this._zones) {
+            if (zone.monitorIndex !== monitorIndex) continue;
+            const snapped = zone.getSnappedWindows();
+            for (const w of snapped) {
+                try {
+                    const isOnMon = (w.get_monitor && w.get_monitor() === monitorIndex);
+                    if (!isOnMon) continue;
+                    const isFs = (typeof w.is_fullscreen === 'function') ? w.is_fullscreen() : false;
+                    const isMax = (typeof w.get_maximized === 'function') ? !!w.get_maximized() : false;
+                    if (isFs || isMax)
+                        return true;
+                } catch (_) {}
+            }
+        }
+        return false;
+    }
+
+    _setTabBarsOnMonitorVisible(monitorIndex, visible) {
+        for (const zone of this._zones) {
+            if (zone.monitorIndex === monitorIndex) {
+                zone.setTabBarVisible(visible);
+            }
+        }
+    }
+
+    _recomputeMonitorTabBars(monitorIndex) {
+        if (monitorIndex == null || monitorIndex < 0) return;
+        const shouldHide = this._anySnappedWindowMaxOrFsOnMonitor(monitorIndex);
+        // Keep logic consistent with _updateAllZonesVisibility()
+        for (const zone of this._zones)
+            if (zone.monitorIndex === monitorIndex)
+                zone.setForceHidden(shouldHide);
+    }
+
+    _recomputeAllMonitors() {
+        const monitors = Main.layoutManager.monitors || [];
+        for (let i = 0; i < monitors.length; i++)
+            this._recomputeMonitorTabBars(i);
     }
 
     _logZoneStates() {
@@ -1807,6 +2011,7 @@ export class WindowManager {
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import Meta from 'gi://Meta';
 import GLib from 'gi://GLib';
+import Clutter from 'gi://Clutter';
 
 import { TabBar } from './TabBar.js';
 
@@ -1821,8 +2026,12 @@ export class Zone {
         this._windowTracker = windowTracker;
         // Minimal MRU tracking: most-recently activated window first
         this._history = [];
-        this._activeWindow = null;        
-
+        this._activeWindow = null;
+        // Allow monitor-wide “force hide” of tab bar during max/fullscreen
+        this._forceHidden = false;
+        // Keep window→signalIds for state watchers we attach when snapped
+        this._stateWatch = new Map(); // Meta.Window -> number[]          
+        
         this._tabBar = new TabBar(tabBarConfig);
         this._tabBar.connect('tab-clicked', (actor, window) => this.activateWindow(window));
         // When the close button on a tab is clicked, the 'tab-removed' signal is emitted.
@@ -1836,6 +2045,21 @@ export class Zone {
 
         this._updateTabBarPosition();
         Main.layoutManager.addChrome(this._tabBar);
+    }
+
+    setTabBarVisible(visible) {
+        // Called by WindowManager to hide ALL tab bars on a monitor while
+        // a snapped window is maximized/fullscreen.
+        // Respect _forceHidden as an override (can be toggled by WindowManager if used).
+        if (this._forceHidden) {
+            this._tabBar.hide();
+            return;
+        }
+        if (visible) {
+            this._tabBar.show();
+        } else {
+            this._tabBar.hide();
+        }
     }
 
     get monitor() {
@@ -1877,7 +2101,8 @@ export class Zone {
         // Some apps (including GNOME Terminal) can be in a "tiled" state.
         // Just unmaximizing is not always enough; explicitly clear tiling.
         try {
-            if (window.get_maximized()) {
+            const maxFlags = (typeof window.get_maximized === 'function') ? window.get_maximized() : Meta.MaximizeFlags.NONE;
+            if (maxFlags !== Meta.MaximizeFlags.NONE) {
                 window.unmaximize(Meta.MaximizeFlags.BOTH);
             }
             if (typeof window.get_tile_type === 'function' &&
@@ -1900,6 +2125,41 @@ export class Zone {
         });
     }
 
+    _attachStateWatch(window) {
+        if (!window || this._stateWatch.has(window))
+            return;
+        const ids = [];
+        // When this snapped window becomes maximized or fullscreen,
+        // WindowManager will recompute monitor tab bar visibility.
+        // We forward the state changes by simply emitting a synthetic size change on the zone,
+        // which WindowManager also listens to via our snapped set; but to be safe, we also
+        // trigger a recompute by toggling our own tab bar once (no-op if unchanged).
+        const onState = () => {
+            // No direct reference to WindowManager here; visibility will be driven
+            // by WindowManager’s watcher. Just ensure our own bar won’t block a full-screened app.
+            // If this window is max/fullscreen, hide our bar eagerly; it will be restored later.
+            try {
+                const isFs = (typeof window.is_fullscreen === 'function') ? window.is_fullscreen() : false;
+                const isMax = (typeof window.get_maximized === 'function') ? !!window.get_maximized() : false;
+                if (isFs || isMax) this._tabBar.hide();
+            } catch (_) {}
+        };
+        try { ids.push(window.connect('notify::maximized', onState)); } catch (_) {}
+        try { ids.push(window.connect('fullscreen-changed', onState)); } catch (_) {}
+        try { ids.push(window.connect('notify::fullscreen', onState)); } catch (_) {}
+        ids.push(window.connect('unmanaged', () => this._detachStateWatch(window)));
+        this._stateWatch.set(window, ids);
+    }
+
+    _detachStateWatch(window) {
+        const ids = this._stateWatch.get(window);
+        if (!ids) return;
+        for (const id of ids) {
+            try { window.disconnect(id); } catch (_) {}
+        }
+        this._stateWatch.delete(window);
+    }
+    
     /**
      * Try to respect WM_NORMAL_HINTS resize increments for apps like GNOME Terminal.
      * There isn't a stable public GJS API to read the raw size hints directly,
@@ -1965,6 +2225,7 @@ export class Zone {
         // Perform a two-step move+resize to coax stubborn clients (e.g., GNOME Terminal).
         this._twoStepMoveResize(window, newX, newY, newWidth, newHeight);
         // Final belt-and-suspenders attempt with user_op=false in case the WM treats it differently.
+        // (Keeps behavior you added later in the file.)        
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
             try {
                 window.move_resize_frame(false, newX, newY, newWidth, newHeight);
@@ -1976,6 +2237,7 @@ export class Zone {
             this._snappedWindows.add(window);
             window._tilingZoneId = this.name; // Tag the window
             this._tabBar.addTab(window);
+            this._attachStateWatch(window);            
         }
 
         this.activateWindow(window);
@@ -2027,11 +2289,21 @@ export class Zone {
         return this._snappedWindows.has(window);
     }
 
-    _updateVisibility() {
-        const shouldBeVisible = this._snappedWindows.size > 0;
-        if (this._tabBar.visible !== shouldBeVisible) {
-            this._tabBar.visible = shouldBeVisible;
+    setForceHidden(hidden) {
+        if (this._forceHidden === hidden) {
+            return;
         }
+        this._forceHidden = hidden;
+        this._updateVisibility();
+    }
+
+    _updateVisibility() {
+        const hasWindows = this._snappedWindows.size > 0;
+        const shouldBeVisible = hasWindows && !this._forceHidden;
+        if (shouldBeVisible)
+            this._tabBar.show();
+        else
+            this._tabBar.hide();
     }
 
     reorderTabs() {

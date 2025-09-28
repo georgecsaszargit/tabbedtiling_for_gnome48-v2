@@ -74,6 +74,10 @@ export class Highlighter {
     destroyPreviews() {
         this._previewHighlights.forEach(actor => actor.destroy());
         this._previewHighlights = [];
+        if (this._previewTimeoutId) {
+            GLib.Source.remove(this._previewTimeoutId);
+            this._previewTimeoutId = 0;
+        }        
     }
 
     destroy() {
