@@ -47,8 +47,6 @@ export const TabBar = GObject.registerClass({
 
         const app = this._windowTracker.get_window_app(window);
         const tab = new Tab(window, app, this._config);
-        // Apply corner radius from config
-        tab.style = `border-radius: ${this._config.cornerRadius ?? 8}px ${this._config.cornerRadius ?? 8}px 0 0;`;        
         
         tab.connect('close-clicked', () => this.emit('tab-removed', window));
         // Ensure the handler is a function (not an immediate call) and returns a valid Clutter event code.
@@ -157,11 +155,14 @@ export const TabBar = GObject.registerClass({
 
     _updateGroupStyles() {
         const children = this._tabContainer.get_children();
+        const baseR = this._config.cornerRadius ?? 8;        
         if (children.length <= 1) {
             children.forEach(c => {
                 c.remove_style_class_name('grouped-start');
                 c.remove_style_class_name('grouped-middle');
                 c.remove_style_class_name('grouped-end');
+                // single tab: both top corners rounded
+                c.set_style(`border-radius: ${baseR}px ${baseR}px 0 0;`);                
             });
             return;
         }
@@ -178,14 +179,32 @@ export const TabBar = GObject.registerClass({
             currentTab.remove_style_class_name('grouped-start');
             currentTab.remove_style_class_name('grouped-middle');
             currentTab.remove_style_class_name('grouped-end');
+            // default radii (both rounded)
+            let tl = baseR;
+            let tr = baseR;
 
             if (currentId === nextId && currentId !== prevId) {
                 currentTab.add_style_class_name('grouped-start');
+                // leftmost in a group: NO LEFT RADIUS, keep right rounded
+                tl = 0;
+                tr = baseR;
             } else if (currentId === prevId && currentId === nextId) {
                 currentTab.add_style_class_name('grouped-middle');
+                // middle: no radius at all
+                tl = 0;
+                tr = 0;
             } else if (currentId === prevId && currentId !== nextId) {
                 currentTab.add_style_class_name('grouped-end');
+                // rightmost in a group: NO RIGHT RADIUS, keep left rounded
+                tl = baseR;
+                tr = 0;
+            } else {
+                // not grouped with neighbors → keep both rounded
+                tl = baseR; tr = baseR;
             }
+
+            // apply radii inline so it overrides any previous inline value
+            currentTab.set_style(`border-radius: ${tl}px ${tr}px 0 0;`);
         }
     }
 
