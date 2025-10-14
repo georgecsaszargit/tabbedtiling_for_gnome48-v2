@@ -129,6 +129,26 @@ export const TabBar = GObject.registerClass({
         }
     }
 
+    /**
+     * Reflect global keyboard focus: the truly-focused window's tab gets full color.
+     * Other zones' active tabs are dimmed to 50% opacity with the same color.
+     */
+    reflectGlobalFocus(focusedWindow) {
+        for (const [win, tab] of this._tabs.entries()) {
+            const isActiveInZone = tab.has_style_class_name('active');
+            if (win === focusedWindow) {
+                // Fully active (focused globally)
+                this._setBg(tab, 'rgba(255, 230, 0, 0.9)'); // yellow highlight
+            } else if (isActiveInZone) {
+                // Active in its zone but not globally focused -> dim
+                this._setBg(tab, this._activeBgColor);
+            } else {
+                // Not active at all
+                this._setBg(tab, '');
+            }
+        }
+    }
+
     reorderTabs(zoneName = 'Unknown') {
         const tabs = this._tabContainer.get_children();
 

@@ -25,12 +25,19 @@ export class WindowManager {
         this._dragHoverTimerId = 0;
     }
 
+    _onFocusChanged() {
+        const focused = global.display.get_focus_window();
+        this._zones.forEach(z => z.reflectGlobalFocus(focused));
+    }
+
     enable() {
         log("DEBUG: enable() called.");
         this.reloadConfiguration();
         this._connectSignals();
         this._updateAllZonesVisibility();
         this._snapExistingWindows();
+        // Initialize correct highlighting on startup
+        this._onFocusChanged();        
     }
 
     disable() {
@@ -69,6 +76,8 @@ export class WindowManager {
         connect(global.display, 'window-created', this._onWindowCreated.bind(this));
         connect(this._windowTracker, 'tracked-windows-changed', this._onTrackedWindowsChanged.bind(this));
         connect(Main.layoutManager, 'monitors-changed', () => this.reloadConfiguration());
+        // Keep tab highlights in sync with true keyboard focus
+        connect(global.display, 'notify::focus-window', this._onFocusChanged.bind(this));
 
         // Manually create a proxy for LoginManager to handle suspend/resume.
         const LoginManagerIface = `

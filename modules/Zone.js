@@ -256,6 +256,12 @@ export class Zone {
         }
     }
 
+    // Called by WindowManager when the global focus changes.
+    reflectGlobalFocus(focusedWindow) {
+        if (this._tabBar)
+            this._tabBar.reflectGlobalFocus(focusedWindow);
+    }
+
     containsWindow(window) {
         return this._snappedWindows.has(window);
     }
