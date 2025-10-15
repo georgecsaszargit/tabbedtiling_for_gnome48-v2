@@ -37,6 +37,7 @@ export class ConfigManager {
                 // NEW: user-tunable colors
                 activeBgColor: 'rgba(0, 110, 200, 0.8)',
                 groupBorderColor: '#4A90E2',
+                globalActiveBgColor: 'rgba(255, 230, 0, 0.9)', // NEW: global active tab color
                 cornerRadius: 8,
                 iconSize: 16,
             fontSize: 10, // in points (pt)

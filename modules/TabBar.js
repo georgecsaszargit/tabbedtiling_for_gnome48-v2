@@ -33,6 +33,7 @@ export const TabBar = GObject.registerClass({
         // Settings-driven colors (with sensible fallbacks)
         this._activeBgColor = String(this._config.activeBgColor ?? 'rgba(0, 110, 200, 0.8)');
         this._groupBorderColor = String(this._config.groupBorderColor ?? '#4A90E2');
+        this._globalActiveBgColor = String(this._config.globalActiveBgColor ?? 'rgba(255, 230, 0, 0.9)');
 
         this._tabContainer = new St.BoxLayout({
             style_class: 'zone-tab-container',
@@ -140,8 +141,8 @@ export const TabBar = GObject.registerClass({
         for (const [win, tab] of this._tabs.entries()) {
             const isActiveInZone = tab.has_style_class_name('active');
             if (win === focusedWindow) {
-                // Fully active (focused globally)
-                this._setBg(tab, 'rgba(255, 230, 0, 0.9)'); // yellow highlight
+                // Globally focused window → configured highlight color
+                this._setBg(tab, this._globalActiveBgColor);
             } else if (isActiveInZone) {
                 // Active in its zone but not globally focused -> dim
                 this._setBg(tab, this._activeBgColor);

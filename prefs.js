@@ -39,6 +39,7 @@ function defaultConfig() {
             // Color keys already used by TabBar/ConfigManager
             activeBgColor: 'rgba(0, 110, 200, 0.8)',
             groupBorderColor: '#4A90E2',
+            globalActiveBgColor: 'rgba(255,230,0,0.9)', // NEW: globally focused tab color
             cornerRadius: 8,
             iconSize: 16,
             fontSize: 10, // in points (pt)
@@ -421,6 +422,14 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             subtitle: _('Pick a color and opacity'),
             initial: cfgTabBar.activeBgColor ?? 'rgba(0,110,200,0.8)',
         });
+        
+        // NEW: Global Active Tab Background Color (used for the truly focused window)
+        const globalActiveBgBtn = this._colorPickerRow({
+            parentGroup: tabBarGroup,
+            title: _('Global Active Tab Background Color'),
+            subtitle: _('Color for the tab of the window that has keyboard focus'),
+            initial: cfgTabBar.globalActiveBgColor ?? 'rgba(255,230,0,0.9)',
+        });        
 
         // Grouped Tabs Border Color (with opacity)
         const groupBorderBtn = this._colorPickerRow({
@@ -558,7 +567,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         saveBtn.connect('clicked', () => {
             const newCfg = this._collectConfig(
                 cfg, {
-                    heightSpin, backgroundBtn, activeBgBtn, groupBorderBtn,
+                    heightSpin, backgroundBtn, activeBgBtn, groupBorderBtn, globalActiveBgBtn,
                     radiusSpin, closeButtonSizeSpin,
                     iconSizeSpin, fontSizeSpin, spacingSpin,
                     maxWidthSpin, titleDropdown, groupDropdown,
@@ -611,6 +620,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             backgroundColor: widgets.backgroundBtn.get_rgba().to_string(),
             activeBgColor: widgets.activeBgBtn.get_rgba().to_string(),
             groupBorderColor: widgets.groupBorderBtn.get_rgba().to_string(),
+            globalActiveBgColor: widgets.globalActiveBgBtn.get_rgba().to_string(), // NEW
             cornerRadius: widgets.radiusSpin.get_value_as_int(),
             iconSize: widgets.iconSizeSpin.get_value_as_int(),
             fontSize: widgets.fontSizeSpin.get_value_as_int(),
