@@ -247,6 +247,10 @@ export class Zone {
         if (this._snappedWindows.has(window)) {
             window.activate(global.get_current_time());
             this._tabBar.setActiveTab(window);
+            // Immediately update the yellow "globally focused" highlight for this tab.
+            // This ensures the tab turns yellow even before the compositor reports focus.
+            if (this._tabBar && this._tabBar.reflectGlobalFocus)
+                this._tabBar.reflectGlobalFocus(window);            
             // Record MRU (most recent first), dedupe, cap to 5
             this._activeWindow = window;
             this._history = this._history.filter(w => w && w !== window && this._snappedWindows.has(w));

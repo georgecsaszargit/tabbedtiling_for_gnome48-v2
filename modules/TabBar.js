@@ -92,6 +92,9 @@ export const TabBar = GObject.registerClass({
         tab.connect('close-clicked', () => this.emit('tab-removed', window));
         tab.connect('button-press-event', (_actor, _event) => {
             try {
+                // Instantly reflect intended focus so the clicked tab turns yellow right away.
+                // The real focus signal may arrive a bit later from Mutter.
+                this.reflectGlobalFocus(window);            
                 this.emit('tab-clicked', window);
             } catch (e) {
                 logError(e, 'Emitting tab-clicked failed');
