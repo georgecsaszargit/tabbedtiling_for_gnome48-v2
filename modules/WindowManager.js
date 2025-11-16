@@ -284,7 +284,29 @@ export class WindowManager {
     }
 
     _isSnappable(window) {
-        if (!window || window.is_fullscreen()) return false;
+        if (!window || window.is_fullscreen()) {
+            return false;
+        }
+
+        // NEW: Check against exclusion list
+        const config = this._configManager.getConfig();
+        const exclusions = config.exclusions ?? { list: [], criteria: 'wmClass' };
+        if (exclusions.list && exclusions.list.length > 0) {
+            let windowId = null;
+            if (exclusions.criteria === 'appName') {
+                const app = this._windowTracker.get_window_app(window);
+                if (app) {
+                    windowId = app.get_name();
+                }
+            } else { // default to 'wmClass'
+                windowId = window.get_wm_class();
+            }
+
+            if (windowId && exclusions.list.some(item => windowId.includes(item))) {
+                log(`Window "${windowId}" is in the exclusion list. Tiling will be skipped.`);
+                return false;
+            }
+        }
         const type = window.get_window_type();
         return type === Meta.WindowType.NORMAL;
     }

@@ -49,6 +49,11 @@ export class ConfigManager {
             sortingCriteria: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
             sortingOrder: 'ASC', // 'ASC', 'DESC'            
             },
+            // NEW: exclusion settings
+            exclusions: {
+                list: [], // e.g., ['Guake', 'gnome-calculator']
+                criteria: 'wmClass' // 'wmClass' or 'appName'
+            },
             // NEW: persisted defaults for the Zone Generator UI
             zoneGenerator: {
                 monitorIndex: 0,

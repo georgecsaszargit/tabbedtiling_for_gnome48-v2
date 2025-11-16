@@ -51,6 +51,11 @@ function defaultConfig() {
             sortingCriteria: 'windowTitle', // 'windowTitle', 'appName', 'wmClass'
             sortingOrder: 'ASC', // 'ASC', 'DESC'                    
         },
+        // NEW: exclusion settings
+        exclusions: {
+            list: [],
+            criteria: 'wmClass', // 'wmClass' or 'appName'
+        },        
         // NEW: persisted defaults for the Zone Generator UI
         zoneGenerator: {
             monitorIndex: 0,
@@ -81,6 +86,8 @@ function loadConfig() {
             return defaultConfig();
         parsed.zones ??= [];
         parsed.tabBar ??= defaultConfig().tabBar;
+        // NEW: ensure exclusions key exists
+        parsed.exclusions ??= defaultConfig().exclusions;
         return parsed;
     } catch (e) {
         log(`Error loading config: ${e}`);
@@ -541,6 +548,37 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         sortOrderRow.activatable_widget = orderDropdown;
         behaviorGroup.add(sortOrderRow);
 
+        // --- Exclusions Group ---
+        const exclusionsGroup = new Adw.PreferencesGroup({
+            title: _('Exclusions'),
+            description: _('Prevent specific applications from being tiled. Use WM_CLASS for best results.'),
+        });
+        page.add(exclusionsGroup);
+
+        const cfgExclusions = { ...defaultConfig().exclusions, ...(cfg.exclusions ?? {}) };
+
+        // Exclusion Criteria
+        const exclusionCriteriaRow = new Adw.ActionRow({ title: _('Exclusion Criteria') });
+        const exclusionModel = new Gtk.StringList();
+        exclusionModel.append(_('WM_CLASS'));
+        exclusionModel.append(_('Application Name'));
+        const exclusionDropdown = new Gtk.DropDown({ model: exclusionModel });
+        const exclusionMap = { 'wmClass': 0, 'appName': 1 };
+        exclusionDropdown.set_selected(exclusionMap[cfgExclusions.criteria] ?? 0);
+        exclusionCriteriaRow.add_suffix(exclusionDropdown);
+        exclusionCriteriaRow.activatable_widget = exclusionDropdown;
+        exclusionsGroup.add(exclusionCriteriaRow);
+
+        // Exclusion List (comma-separated)
+        const exclusionListRow = new Adw.ActionRow({ title: _('Exclusion List (comma-separated)') });
+        const exclusionEntry = new Gtk.Entry({
+            hexpand: true,
+            text: (cfgExclusions.list ?? []).join(', '),
+        });
+        exclusionListRow.add_suffix(exclusionEntry);
+        exclusionListRow.activatable_widget = exclusionEntry;
+        exclusionsGroup.add(exclusionListRow);
+
         // Footer: Save & Apply (must be added to a PreferencesGroup, not directly to the Page)
         const footer = new Adw.ActionRow();
 
@@ -571,7 +609,8 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                     radiusSpin, closeButtonSizeSpin,
                     iconSizeSpin, fontSizeSpin, spacingSpin,
                     maxWidthSpin, titleDropdown, groupDropdown,
-                    sortDropdown, orderDropdown
+                    sortDropdown, orderDropdown,
+                    exclusionDropdown, exclusionEntry
                 }
             );
             if (saveConfig(newCfg)) {
@@ -613,6 +652,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         const groupMap = ['appName', 'wmClass'];        
         const sortMap = ['windowTitle', 'appName', 'wmClass'];
         const orderMap = ['ASC', 'DESC'];
+        const exclusionMap = ['wmClass', 'appName']; // NEW        
 
         const tabBar = {
             ...(existingCfg.tabBar ?? defaultConfig().tabBar),
@@ -633,12 +673,24 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             sortingOrder: orderMap[widgets.orderDropdown.get_selected()],
         };
 
+        // NEW: Collect exclusion settings
+        const exclusionList = widgets.exclusionEntry.get_text()
+            .split(',') // split by comma
+            .map(s => s.trim()) // trim whitespace
+            .filter(s => s.length > 0); // remove empty entries
+        
+        const exclusions = {
+            list: exclusionList,
+            criteria: exclusionMap[widgets.exclusionDropdown.get_selected()],
+        };
+
         // Basic validation: drop zones with non-positive size
         const saneZones = zones.filter(z => (z.width > 0 && z.height > 0));
 
         // Preserve previously saved generator defaults
         const zoneGenerator = { ...(existingCfg.zoneGenerator ?? defaultConfig().zoneGenerator) };
-        return { zones: saneZones, tabBar, zoneGenerator };
+        // Add exclusions to returned object
+        return { zones: saneZones, tabBar, zoneGenerator, exclusions };
     }
 
     _toast(window, text) {
