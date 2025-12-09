@@ -9,10 +9,15 @@ import { TabBar } from './TabBar.js';
 const log = msg => console.log(`[TabbedTiling.Zone] ${msg}`);
 
 export class Zone {
-    constructor(zoneData, tabBarConfig, windowTracker) {
+    constructor(zoneData, tabBarConfig, windowTracker, parentZone = null) {
+        this.childZones = [];
+        this.splitDirection = 'none'; // 'horizontal', 'vertical', or 'none'
         // Copy all properties from the config
         Object.assign(this, zoneData);
 
+        // Set parentZone AFTER Object.assign to prevent it from being overwritten
+        // by a null value from the zoneData.
+        this.parentZone = parentZone;        
         this._snappedWindows = new Set();
         this._windowTracker = windowTracker;
         // Minimal MRU tracking: most-recently activated window first
@@ -24,6 +29,14 @@ export class Zone {
         this._tabBar = new TabBar(tabBarConfig);
         this._tabBar.connect('tab-clicked', (actor, window) => this.activateWindow(window));
         // When the close button on a tab is clicked, the 'tab-removed' signal is emitted.
+        this._tabBar.connect('split-clicked', (actor, direction) => {
+            this.split(direction);
+        });
+        this._tabBar.connect('merge-clicked', () => {
+            if (this.parentZone) {
+                this.parentZone.merge();
+            }
+        });        
         // We connect this to an action that closes the actual window.
         this._tabBar.connect('tab-removed', (actor, window) => {
             window.delete(global.get_current_time());
@@ -33,6 +46,7 @@ export class Zone {
         });
 
         this._updateTabBarPosition();
+        this._updateActionButtons();        
         Main.layoutManager.addChrome(this._tabBar);
     }
 
@@ -158,12 +172,29 @@ export class Zone {
     }
 
     snapWindow(window) {
+        // If this is a parent zone, delegate snap to the first child.
+        if (this.childZones.length > 0) {
+            this.childZones[0].snapWindow(window);
+            return;
+        }        
         // GUARD: Never attempt to snap a window that is already maximized or fullscreen.
         // This prevents a race condition where the maximize signal is caught, but another
         // process tries to re-snap the window before its state is fully settled.
 		if ((window.get_maximized && window.get_maximized()) || (window.is_fullscreen && window.is_fullscreen())) {
 	        return;
 	    }
+        // If the window is already in another zone (including a sibling), unsnap it first.
+        // This is a more robust way to handle moves between zones.
+        if (window._tilingZone && window._tilingZone !== this) {
+            window._tilingZone.unsnapWindow(window);
+        }
+
+        if (!this._snappedWindows.has(window)) {
+            this._snappedWindows.add(window);
+            window._tilingZoneId = this.name; // Tag the window
+            window._tilingZone = this; // Direct reference for easier moves
+            this._tabBar.addTab(window);
+        }        
         if (!this.rect) return;
 
         // Ensure not maximized/tiled before attempting to move.
@@ -193,12 +224,6 @@ export class Zone {
             return GLib.SOURCE_REMOVE;
         });
 
-        if (!this._snappedWindows.has(window)) {
-            this._snappedWindows.add(window);
-            window._tilingZoneId = this.name; // Tag the window
-            this._tabBar.addTab(window); 
-        }
-
         this.activateWindow(window);
         this._updateVisibility();
     }
@@ -208,6 +233,7 @@ export class Zone {
         if (this._snappedWindows.has(window)) {
             this._snappedWindows.delete(window);
             delete window._tilingZoneId;
+            delete window._tilingZone;
             this._tabBar.removeTab(window);
 
             // Remove from MRU history (and prune any stale refs while we're here)
@@ -296,11 +322,117 @@ export class Zone {
         return new Set(this._snappedWindows);
     }
 
+    getAllLeafZones() {
+        if (this.childZones.length === 0) {
+            return [this];
+        }
+        return this.childZones.flatMap(child => child.getAllLeafZones());
+    }
+
+    findLeafZoneAt(x, y) {
+        // If this is a parent, search children recursively.
+        if (this.childZones.length > 0) {
+            for (const child of this.childZones) {
+                const found = child.findLeafZoneAt(x, y);
+                if (found) return found;
+            }
+            return null;
+        }
+
+        // Otherwise, this is a leaf. Check if the point is within its bounds.
+        const rect = this.rect;
+        if (!rect) return null;
+
+        if (x >= rect.x && x < rect.x + rect.width &&
+            y >= rect.y && y < rect.y + rect.height) {
+            return this;
+        }
+        return null;
+    }
+
+    findZoneForWindow(window) {
+        // If this is a parent, search children recursively.
+        if (this.childZones.length > 0) {
+            for (const child of this.childZones) {
+                const found = child.findZoneForWindow(window);
+                if (found) return found;
+            }
+            return null;
+        }
+        // Otherwise, this is a leaf. Check if it contains the window.
+        return this.containsWindow(window) ? this : null;
+    }
+
+    split(direction) {
+        // Can only split a leaf zone that isn't already part of a split
+        if (this.childZones.length > 0 || !['horizontal', 'vertical'].includes(direction)) {
+            return;
+        }
+
+        this.splitDirection = direction;
+        const windowsToMove = [...this.getSnappedWindows()];
+        windowsToMove.forEach(w => this.unsnapWindow(w)); // Unsnap but keep track
+
+        const childData1 = { ...this }; // Copy properties
+        const childData2 = { ...this };
+
+        if (direction === 'horizontal') {
+            const newHeight = Math.floor(this.height / 2);
+            childData1.height = newHeight;
+            childData2.height = this.height - newHeight;
+            childData2.y = this.y + newHeight;
+        } else { // vertical
+            const newWidth = Math.floor(this.width / 2);
+            childData1.width = newWidth;
+            childData2.width = this.width - newWidth;
+            childData2.x = this.x + newWidth;
+        }
+
+        const child1 = new Zone(childData1, this._tabBar._config, this._windowTracker, this);
+        const child2 = new Zone(childData2, this._tabBar._config, this._windowTracker, this);
+        this.childZones = [child1, child2];
+
+        // Move original windows to the first child
+        windowsToMove.forEach(w => child1.snapWindow(w));
+
+        this.setTabBarVisible(false);
+        this._updateActionButtons();
+    }
+
+    merge() {
+        // Can only merge if this zone is a parent
+        if (this.childZones.length === 0) {
+            return;
+        }
+
+        const windowsToMove = this.childZones.flatMap(child => [...child.getSnappedWindows()]);
+
+        // Destroy children, which will unsnap their windows
+        this.childZones.forEach(child => child.destroy());
+        this.childZones = [];
+        this.splitDirection = 'none';
+
+        // Re-snap all collected windows to this now-merged zone
+        windowsToMove.forEach(w => this.snapWindow(w));
+
+        this._updateVisibility();
+        this._updateActionButtons();
+    }
+
+    _updateActionButtons() {
+        this._tabBar.updateActionButtons(this.childZones.length > 0, !!this.parentZone);
+    }
+
     getTabs() {
         return this._tabBar.getTabs();
     }
 
     destroy() {
+        // Recursively destroy children first
+        if (this.childZones.length > 0) {
+            [...this.childZones].forEach(child => child.destroy());
+            this.childZones = [];
+        }        
         // Unsnap all windows before destroying
         [...this._snappedWindows].forEach(win => this.unsnapWindow(win));
         if (this._tabBar) {

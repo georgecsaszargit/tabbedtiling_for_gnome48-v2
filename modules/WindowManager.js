@@ -256,7 +256,9 @@ export class WindowManager {
             this._highlighter.hideHoverHighlight();
             return;
         }
-        const zone = this._findZoneAt(x, y) ?? this._findNearestZoneWithinThreshold(x, y, 48);
+        // IMPORTANT: We must search for the specific LEAF zone under the cursor.
+        // A parent zone is just a container and shouldn't be highlighted itself.
+        const zone = this._findLeafZoneAt(x, y) ?? this._findNearestZoneWithinThreshold(x, y, 48);
         if (zone) {
             // Get the tab bar height from the configuration to calculate the correct highlight area.
             const config = this._configManager.getConfig();
@@ -362,12 +364,17 @@ export class WindowManager {
         const monitorIndex = global.display.get_monitor_index_for_rect(
             new Mtk.Rectangle({ x, y, width: 1, height: 1 })
         );
-        const monitor = Main.layoutManager.monitors[monitorIndex];
-        if (!monitor) return null;
 
         let best = { zone: null, dist: Infinity };
-        for (const zone of this._zones) {
-            if (zone.monitorIndex !== monitorIndex) continue;
+        // Get all leaf zones on the current monitor
+        const leafZonesOnMonitor = this._zones
+            .flatMap(zone => zone.getAllLeafZones())
+            .filter(leaf => leaf.monitorIndex === monitorIndex);
+
+        if (leafZonesOnMonitor.length === 0) return null;
+        const monitor = Main.layoutManager.monitors[monitorIndex];
+
+        for (const zone of leafZonesOnMonitor) {
             const rect = {
                 x: monitor.x + zone.x,
                 y: monitor.y + zone.y,
@@ -395,7 +402,7 @@ export class WindowManager {
 
         const [pointerX, pointerY] = global.get_pointer();
         // 1) Try direct hit
-        let targetZone = this._findZoneAt(pointerX, pointerY);
+        let targetZone = this._findLeafZoneAt(pointerX, pointerY);
 
         const originalZone = window._tilingOriginalZone;
         if (originalZone) {
@@ -531,35 +538,29 @@ export class WindowManager {
         const frame = window.get_frame_rect();
         const centerX = frame.x + frame.width / 2;
         const centerY = frame.y + frame.height / 2;
-        return this._findZoneAt(centerX, centerY);
+        return this._findLeafZoneAt(centerX, centerY);
     }
 
-    _findZoneAt(x, y) {
-        const monitorIndex = global.display.get_monitor_index_for_rect(
-            new Mtk.Rectangle({ x, y, width: 1, height: 1 })
-        );
-        const monitor = Main.layoutManager.monitors[monitorIndex];
-        if (!monitor) return null;
-
+    _findLeafZoneAt(x, y) {
         for (const zone of this._zones) {
-            if (zone.monitorIndex !== monitorIndex) continue;
-
-            const zoneRect = {
-                x: monitor.x + zone.x,
-                y: monitor.y + zone.y,
-                width: zone.width,
-                height: zone.height,
-            };
-
-            if (x >= zoneRect.x && x <= zoneRect.x + zoneRect.width &&
-                y >= zoneRect.y && y <= zoneRect.y + zoneRect.height) {
-                return zone;
-            }
+            // Search through the zone and its children recursively
+            const leafZone = zone.findLeafZoneAt(x, y);
+            if (leafZone) return leafZone;
         }
         return null;
     }
 
     _findZoneForWindow(window) {
-        return this._zones.find(zone => zone.containsWindow(window));
+        // Check the direct reference first for performance
+        if (window._tilingZone && window._tilingZone.containsWindow(window)) {
+            return window._tilingZone;
+        }
+
+        // Fallback: search all zones recursively
+        for (const zone of this._zones) {
+            const found = zone.findZoneForWindow(window);
+            if (found) return found;
+        }
+        return null;
     }
 }

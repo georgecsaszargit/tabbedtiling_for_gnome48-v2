@@ -4,8 +4,12 @@ import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 
 import { Tab } from './Tab.js';
+
+// The correct way to get the extension's root path from within an ES module.
+const Me = Gio.File.new_for_uri(import.meta.url).get_parent().get_parent();
 
 const log = msg => console.log(`[TabbedTiling.TabBar] ${msg}`);
 
@@ -14,6 +18,8 @@ export const TabBar = GObject.registerClass({
     Signals: {
         'tab-clicked': { param_types: [GObject.TYPE_OBJECT] }, // Meta.Window
         'tab-removed': { param_types: [GObject.TYPE_OBJECT] }, // Meta.Window
+        'split-clicked': { param_types: [GObject.TYPE_STRING] }, // direction
+        'merge-clicked': {},
         'tab-moved':   { param_types: [GObject.TYPE_OBJECT] }, // Custom object
     },
 }, class TabBar extends St.BoxLayout {
@@ -23,7 +29,7 @@ export const TabBar = GObject.registerClass({
             reactive: true,
             visible: false,
         });
-        
+
         this.set_height(tabBarConfig.height || 32);
         this.style = `background-color: ${tabBarConfig.backgroundColor};`;
         this._config = tabBarConfig;
@@ -39,7 +45,49 @@ export const TabBar = GObject.registerClass({
             style_class: 'zone-tab-container',
             style: `spacing: ${this._config.spacing ?? 4}px;`
         });
-        this.add_child(this._tabContainer);        
+        this.add_child(this._tabContainer);
+
+        // Spacer to push action buttons to the right
+        const spacer = new St.Bin({ x_expand: true });
+        this.add_child(spacer);
+
+        // Action buttons (split/merge)
+        const btnStyle = 'zone-tab-close-button'; // Re-use style for consistent look
+        const iconSize = 14;
+        this._splitHorizontalButton = new St.Button({ style_class: btnStyle });
+        const horIconFile = Gio.File.new_for_path(Me.get_path() + '/icons/split-hor.png');
+        this._splitHorizontalButton.set_child(new St.Icon({
+            gicon: new Gio.FileIcon({ file: horIconFile }),
+            icon_size: iconSize
+        }));
+        this._splitHorizontalButton.connect('clicked', () => this.emit('split-clicked', 'horizontal'));
+        this.add_child(this._splitHorizontalButton);
+
+        this._splitVerticalButton = new St.Button({ style_class: btnStyle, style: 'margin-left: 4px;' });
+        const verIconFile = Gio.File.new_for_path(Me.get_path() + '/icons/split-ver.png');
+        this._splitVerticalButton.set_child(new St.Icon({
+            gicon: new Gio.FileIcon({ file: verIconFile }),
+            icon_size: iconSize
+        }));
+        this._splitVerticalButton.connect('clicked', () => this.emit('split-clicked', 'vertical'));
+        this.add_child(this._splitVerticalButton);
+
+        this._mergeButton = new St.Button({ style_class: btnStyle, visible: false });
+        const fullIconFile = Gio.File.new_for_path(Me.get_path() + '/icons/full.png');
+        this._mergeButton.set_child(new St.Icon({
+            gicon: new Gio.FileIcon({ file: fullIconFile }),
+            icon_size: iconSize
+        }));
+        this._mergeButton.connect('clicked', () => this.emit('merge-clicked'));
+        this.add_child(this._mergeButton);
+    }
+
+    updateActionButtons(isSplit, isChild) {
+        const canSplit = !isSplit; // A zone can be split as long as it's not already a parent.
+        this._splitHorizontalButton.visible = canSplit;
+        this._splitVerticalButton.visible = canSplit;
+        // The merge button is available on any child of a split.
+        this._mergeButton.visible = isChild;
     }
 
     /* ---------- tiny helpers to compose inline styles without clobbering ---------- */
@@ -89,13 +137,13 @@ export const TabBar = GObject.registerClass({
 
         const app = this._windowTracker.get_window_app(window);
         const tab = new Tab(window, app, this._config);
-        
+
         tab.connect('close-clicked', () => this.emit('tab-removed', window));
         tab.connect('button-press-event', (_actor, _event) => {
             try {
                 // Instantly reflect intended focus so the clicked tab turns yellow right away.
                 // The real focus signal may arrive a bit later from Mutter.
-                this.reflectGlobalFocus(window);            
+                this.reflectGlobalFocus(window);
                 this.emit('tab-clicked', window);
             } catch (e) {
                 logError(e, 'Emitting tab-clicked failed');
@@ -118,7 +166,7 @@ export const TabBar = GObject.registerClass({
             this.reorderTabs();
         }
     }
-    
+
     setActiveTab(window) {
         for (const [win, tab] of this._tabs.entries()) {
             if (win === window) {
@@ -275,4 +323,3 @@ export const TabBar = GObject.registerClass({
         super.destroy();
     }
 });
-
