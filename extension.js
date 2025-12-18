@@ -2,6 +2,8 @@
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import { WindowManager } from './modules/WindowManager.js';
@@ -9,6 +11,9 @@ import { ConfigManager } from './modules/ConfigManager.js';
 import { Highlighter } from './modules/Highlighter.js';
 
 const log = msg => console.log(`[TabbedTiling] ${msg}`);
+
+const KEYBINDING_CYCLE_NEXT = 'cycle-next-tab';
+const KEYBINDING_CYCLE_PREV = 'cycle-prev-tab';
 
 export default class TabbedTilingExtension extends Extension {
     constructor(metadata) {
@@ -18,6 +23,7 @@ export default class TabbedTilingExtension extends Extension {
         this._highlighter = null;
         this._configFileMonitor = null;
         this._previewFileMonitor = null;
+        this._settings = null;
     }
 
     enable() {
@@ -28,12 +34,14 @@ export default class TabbedTilingExtension extends Extension {
         }    
         log('Enabling...');
 
+        this._settings = this.getSettings();
         this._configManager = new ConfigManager();
         this._highlighter = new Highlighter();
         this._windowManager = new WindowManager(this._configManager, this._highlighter);
 
         try {
             this._windowManager.enable();
+            this._addKeybindings();
             this._monitorConfigFiles();
             log('Enabled successfully.');
         } catch (e) {
@@ -44,6 +52,8 @@ export default class TabbedTilingExtension extends Extension {
 
     disable() {
         log('Disabling...');
+
+        this._removeKeybindings();
 
         if (this._configFileMonitor) {
             this._configFileMonitor.cancel();
@@ -65,7 +75,29 @@ export default class TabbedTilingExtension extends Extension {
         }
 
         this._configManager = null;
+        this._settings = null;
         log('Disabled.');
+    }
+
+    _addKeybindings() {
+        const add = (name) => {
+            Main.wm.addKeybinding(
+                name,
+                this._settings,
+                Meta.KeyBindingFlags.NONE,
+                Shell.ActionMode.NORMAL,
+                () => {
+                    if (name === KEYBINDING_CYCLE_NEXT) this._windowManager.cycleTabNextInFocusedZone();
+                    else if (name === KEYBINDING_CYCLE_PREV) this._windowManager.cycleTabPreviousInFocusedZone();
+                }
+            );
+        };
+        add(KEYBINDING_CYCLE_NEXT);
+        add(KEYBINDING_CYCLE_PREV);
+    }
+    _removeKeybindings() {
+        Main.wm.removeKeybinding(KEYBINDING_CYCLE_NEXT);
+        Main.wm.removeKeybinding(KEYBINDING_CYCLE_PREV);
     }
 
     _monitorConfigFiles() {

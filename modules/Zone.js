@@ -269,6 +269,40 @@ export class Zone {
         }
     }
 
+    cycleTabNext() {
+        if (!this._activeWindow) return;
+
+        const tabs = this._tabBar.getTabs();
+        if (tabs.length < 2) return;
+
+        const currentIndex = tabs.findIndex(tab => tab.window === this._activeWindow);
+
+        // If found and not the last tab, move to the next one
+        if (currentIndex > -1 && currentIndex < tabs.length - 1) {
+            const nextTab = tabs[currentIndex + 1];
+            if (nextTab && nextTab.window) {
+                this.activateWindow(nextTab.window);
+            }
+        }
+    }
+
+    cycleTabPrevious() {
+        if (!this._activeWindow) return;
+
+        const tabs = this._tabBar.getTabs();
+        if (tabs.length < 2) return;
+
+        const currentIndex = tabs.findIndex(tab => tab.window === this._activeWindow);
+
+        // If found and not the first tab, move to the previous one
+        if (currentIndex > 0) {
+            const prevTab = tabs[currentIndex - 1];
+            if (prevTab && prevTab.window) {
+                this.activateWindow(prevTab.window);
+            }
+        }
+    }
+
     activateWindow(window) {
         if (this._snappedWindows.has(window)) {
             window.activate(global.get_current_time());
@@ -283,6 +317,32 @@ export class Zone {
             this._history.unshift(window);
             if (this._history.length > 5)
                 this._history.length = 5;            
+        }
+    }
+
+    cycleTabNext() {
+        const tabs = this.getTabs();
+        if (tabs.length < 2) return;
+
+        const currentIndex = tabs.findIndex(t => t.window === this._activeWindow);
+        if (currentIndex !== -1 && currentIndex < tabs.length - 1) {
+            const nextTab = tabs[currentIndex + 1];
+            if (nextTab && nextTab.window) {
+                this.activateWindow(nextTab.window);
+            }
+        }
+    }
+
+    cycleTabPrevious() {
+        const tabs = this.getTabs();
+        if (tabs.length < 2) return;
+
+        const currentIndex = tabs.findIndex(t => t.window === this._activeWindow);
+        if (currentIndex > 0) {
+            const prevTab = tabs[currentIndex - 1];
+            if (prevTab && prevTab.window) {
+                this.activateWindow(prevTab.window);
+            }
         }
     }
 

@@ -25,6 +25,26 @@ export class WindowManager {
         this._dragHoverTimerId = 0;
     }
 
+    cycleTabNextInFocusedZone() {
+        const focusedWindow = global.display.get_focus_window();
+        if (!focusedWindow) return;
+
+        const zone = this._findZoneForWindow(focusedWindow);
+        if (zone) {
+            zone.cycleTabNext();
+        }
+    }
+
+    cycleTabPreviousInFocusedZone() {
+        const focusedWindow = global.display.get_focus_window();
+        if (!focusedWindow) return;
+
+        const zone = this._findZoneForWindow(focusedWindow);
+        if (zone) {
+            zone.cycleTabPrevious();
+        }
+    }
+
     _onFocusChanged() {
         const focused = global.display.get_focus_window();
         this._zones.forEach(z => z.reflectGlobalFocus(focused));

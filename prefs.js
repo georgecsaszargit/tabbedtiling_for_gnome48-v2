@@ -548,6 +548,24 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         sortOrderRow.activatable_widget = orderDropdown;
         behaviorGroup.add(sortOrderRow);
 
+        // --- Keybindings Group ---
+        const keybindingsGroup = new Adw.PreferencesGroup({
+            title: _('Keybindings'),
+            description: _('These shortcuts are fixed and cannot be changed from this panel.'),
+        });
+        page.add(keybindingsGroup);
+
+        const nextTabRow = new Adw.ActionRow({
+            title: _('Cycle to next tab'),
+            subtitle: 'Ctrl + Shift + Right',
+        });
+        keybindingsGroup.add(nextTabRow);
+        const prevTabRow = new Adw.ActionRow({
+            title: _('Cycle to previous tab'),
+            subtitle: 'Ctrl + Shift + Left',
+        });
+        keybindingsGroup.add(prevTabRow);
+
         // --- Exclusions Group ---
         const exclusionsGroup = new Adw.PreferencesGroup({
             title: _('Exclusions'),
