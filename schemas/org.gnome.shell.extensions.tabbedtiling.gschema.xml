@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.tabbedtiling" path="/org/gnome/shell/extensions/tabbedtiling/">
+    <key name="cycle-next-tab" type="as">
+      <default><![CDATA[['<Control><Shift>Right']]]></default>
+      <summary>Cycle to the next tab</summary>
+      <description>Keybinding to activate the next tab in the current zone.</description>
+    </key>
+    <key name="cycle-prev-tab" type="as">
+      <default><![CDATA[['<Control><Shift>Left']]]></default>
+      <summary>Cycle to the previous tab</summary>
+      <description>Keybinding to activate the previous tab in the current zone.</description>
+    </key>
+  </schema>
+</schemalist>
