@@ -11,5 +11,10 @@
       <summary>Cycle to the previous tab</summary>
       <description>Keybinding to activate the previous tab in the current zone.</description>
     </key>
+    <key name="log-key-press" type="as">
+      <default><![CDATA[['<Alt>Q']]]></default>
+      <summary>Toggle Tab Bar Layer</summary>
+      <description>Keybinding to move tab bars behind all windows and make them non-interactive. Press again to restore.</description>
+    </key>
   </schema>
 </schemalist>

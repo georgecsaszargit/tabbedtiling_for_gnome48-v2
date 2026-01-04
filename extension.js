@@ -14,6 +14,7 @@ const log = msg => console.log(`[TabbedTiling] ${msg}`);
 
 const KEYBINDING_CYCLE_NEXT = 'cycle-next-tab';
 const KEYBINDING_CYCLE_PREV = 'cycle-prev-tab';
+const KEYBINDING_LOG_PRESS = 'log-key-press';
 
 export default class TabbedTilingExtension extends Extension {
     constructor(metadata) {
@@ -89,15 +90,18 @@ export default class TabbedTilingExtension extends Extension {
                 () => {
                     if (name === KEYBINDING_CYCLE_NEXT) this._windowManager.cycleTabNextInFocusedZone();
                     else if (name === KEYBINDING_CYCLE_PREV) this._windowManager.cycleTabPreviousInFocusedZone();
+                    else if (name === KEYBINDING_LOG_PRESS) this._windowManager.toggleTabBarsLayer();
                 }
             );
         };
         add(KEYBINDING_CYCLE_NEXT);
         add(KEYBINDING_CYCLE_PREV);
+        add(KEYBINDING_LOG_PRESS);
     }
     _removeKeybindings() {
         Main.wm.removeKeybinding(KEYBINDING_CYCLE_NEXT);
         Main.wm.removeKeybinding(KEYBINDING_CYCLE_PREV);
+        Main.wm.removeKeybinding(KEYBINDING_LOG_PRESS);
     }
 
     _monitorConfigFiles() {

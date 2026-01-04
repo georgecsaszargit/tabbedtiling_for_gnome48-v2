@@ -22,6 +22,7 @@ export class WindowManager {
         this._windowStateSignals = new Map();
         this._loginProxy = null;
         // Hover polling while dragging (since MetaDisplay lacks grab-op-motion)
+        this._tabBarsToggledBack = false;
         this._dragHoverTimerId = 0;
     }
 
@@ -43,6 +44,22 @@ export class WindowManager {
         if (zone) {
             zone.cycleTabPrevious();
         }
+    }
+
+    toggleTabBarsLayer() {
+        this._tabBarsToggledBack = !this._tabBarsToggledBack;
+        log(`Toggling tab bars layer. Now behind: ${this._tabBarsToggledBack}`);
+
+        // This recursive function ensures we apply the setting to all zones,
+        // including children created by splitting a zone.
+        const applyToAll = (zone) => {
+            zone.setLayer(this._tabBarsToggledBack);
+            if (zone.childZones && zone.childZones.length > 0) {
+                zone.childZones.forEach(applyToAll);
+            }
+        };
+
+        this._zones.forEach(applyToAll);
     }
 
     _onFocusChanged() {

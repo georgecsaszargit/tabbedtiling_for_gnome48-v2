@@ -48,6 +48,32 @@ export class Zone {
         this._updateTabBarPosition();
         this._updateActionButtons();        
         Main.layoutManager.addChrome(this._tabBar);
+        this._isTabBarInChrome = true; // State tracker for layer changes
+    }
+
+    setLayer(isBehind) {
+        if (!this._tabBar) return;
+
+        if (isBehind && this._isTabBarInChrome) {
+            // It's currently in chrome, so move it to the background.
+            // removeChrome untracks the actor and removes it from the UI group.
+            Main.layoutManager.removeChrome(this._tabBar);
+            // Now add it to the background layer.
+            Main.layoutManager._backgroundGroup.add_child(this._tabBar);
+            this._tabBar.reactive = false; // Make it non-clickable
+            this._isTabBarInChrome = false;
+        } else if (!isBehind && !this._isTabBarInChrome) {
+            // It's currently in the background, so move it back to chrome.
+            // First, ensure it's removed from its current parent (the background group).
+            const parent = this._tabBar.get_parent();
+            if (parent) {
+                parent.remove_child(this._tabBar);
+            }
+            // addChrome re-adds it to the UI layer and tracks it again.
+            Main.layoutManager.addChrome(this._tabBar);
+            this._tabBar.reactive = true; // Make it clickable again
+            this._isTabBarInChrome = true;
+        }
     }
 
     setTabBarVisible(visible) {
