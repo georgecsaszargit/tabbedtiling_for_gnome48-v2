@@ -47,8 +47,10 @@ export class Zone {
 
         this._updateTabBarPosition();
         this._updateActionButtons();        
-        Main.layoutManager.addChrome(this._tabBar);
-        this._isTabBarInChrome = true; // State tracker for layer changes
+        // Default to being in the background layer.
+        Main.layoutManager._backgroundGroup.add_child(this._tabBar);
+        this._tabBar.reactive = false;
+        this._isTabBarInChrome = false; // State tracker for layer changes
     }
 
     setLayer(isBehind) {

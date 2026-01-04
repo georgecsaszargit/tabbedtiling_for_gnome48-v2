@@ -566,6 +566,12 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         });
         keybindingsGroup.add(prevTabRow);
 
+        const toggleLayerRow = new Adw.ActionRow({
+            title: _('Toggle Tab Bar Layer'),
+            subtitle: _("Alt + Q: Toggles tab bars between the foreground and background. Toggle it if you want the tabs and the tab bar to always be on top."),
+        });
+        keybindingsGroup.add(toggleLayerRow);
+
         // --- Exclusions Group ---
         const exclusionsGroup = new Adw.PreferencesGroup({
             title: _('Exclusions'),

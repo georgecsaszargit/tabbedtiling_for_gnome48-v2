@@ -22,7 +22,7 @@ export class WindowManager {
         this._windowStateSignals = new Map();
         this._loginProxy = null;
         // Hover polling while dragging (since MetaDisplay lacks grab-op-motion)
-        this._tabBarsToggledBack = false;
+        this._tabBarsToggledBack = true; // Start with tab bars in the background
         this._dragHoverTimerId = 0;
     }
 
