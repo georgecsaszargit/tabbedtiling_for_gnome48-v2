@@ -269,15 +269,26 @@ export class Zone {
 
             // If the removed one was active, try to restore the most recent valid one
             if (wasActive) {
-                const fallback = this._history.find(w => this._snappedWindows.has(w));
-                if (fallback) {
-                    this.activateWindow(fallback);
-                } else if (this._snappedWindows.size > 0) {
-                    // Final fallback: first remaining window in the zone
-                    const nextWindow = this._snappedWindows.values().next().value;
-                    this.activateWindow(nextWindow);
+                // Find the next window to activate, prioritizing MRU history.
+                let nextToActivate = this._history.find(w => this._snappedWindows.has(w));
+                if (!nextToActivate && this._snappedWindows.size > 0) {
+                    // Final fallback: first remaining window in the zone.
+                    nextToActivate = this._snappedWindows.values().next().value;
+                }
+
+                if (nextToActivate) {
+                    // DEFER activation until the window manager is idle. This is the key fix
+                    // to prevent a race condition when a window is closed and focus shifts
+                    // simultaneously, which can crash mutter.
+                    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                        // Re-verify the window is still valid before activating.
+                        if (this._snappedWindows.has(nextToActivate)) {
+                            this.activateWindow(nextToActivate);
+                        }
+                        return GLib.SOURCE_REMOVE;
+                    });
                 } else {
-                    // Zone is empty
+                    // The zone is now empty.
                     this._activeWindow = null;
                 }
             }
