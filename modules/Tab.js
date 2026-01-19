@@ -3,8 +3,6 @@ import St from 'gi://St';
 import GObject from 'gi://GObject';
 import Pango from 'gi://Pango';
 import Clutter from 'gi://Clutter';
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 export const Tab = GObject.registerClass({
     GTypeName: 'TabbedTiling_Tab',
@@ -67,35 +65,6 @@ export const Tab = GObject.registerClass({
         this._titleChangedId = window.connect('notify::title', () => {
             label.set_text(this.getTabTitle());
         });
-
-        // --- Right-Click Menu ---
-        this.menu = new PopupMenu.PopupMenu(this, 0.5, St.Side.TOP);
-        this.menu.actor.reactive = true; // Ensure menu can receive events
-
-        const forceCloseItem = new PopupMenu.PopupMenuItem('Force Close');
-        forceCloseItem.connect('activate', () => {
-            // Re-use the existing 'close-clicked' signal for consistent behavior
-            this.emit('close-clicked');
-        });
-        this.menu.addMenuItem(forceCloseItem);
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        const cancelItem = new PopupMenu.PopupMenuItem('Cancel');
-        cancelItem.connect('activate', () => {
-            this.menu.close();
-        });
-        this.menu.addMenuItem(cancelItem);
-
-        Main.uiGroup.add_child(this.menu.actor);
-        this.menu.actor.hide();
-
-        this.connect('button-press-event', (_actor, event) => {
-            if (event.get_button() === 3) { // 3 is the right mouse button
-                this.menu.open(true);
-                return Clutter.EVENT_STOP; // Stop event from propagating
-            }
-            return Clutter.EVENT_PROPAGATE;
-        });    
     }
 
     getTabTitle() {
@@ -136,9 +105,7 @@ export const Tab = GObject.registerClass({
                 this.window.disconnect(this._titleChangedId);
             } catch (e) { /* ignore */ }
         }
-        if (this.menu) {
-            this.menu.destroy();
-        }
+       
         super.destroy();
     }
 });
