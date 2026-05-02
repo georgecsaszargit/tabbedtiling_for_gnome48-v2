@@ -12,9 +12,10 @@ import { Zone } from './Zone.js';
 const log = (msg) => console.log(`[TabbedTiling.WindowManager] ${msg}`);
 
 export class WindowManager {
-    constructor(configManager, highlighter) {
+    constructor(configManager, highlighter, profileManager = null) {
         this._configManager = configManager;
         this._highlighter = highlighter;
+        this._profileManager = profileManager;
         this._zones = [];
         this._signalConnections = [];
         this._windowTracker = Shell.WindowTracker.get_default();
@@ -92,7 +93,20 @@ export class WindowManager {
         this._zones.forEach(zone => zone.destroy());
         this._zones = [];
 
-        config.zones.forEach(zoneData => {
+        // Get zones from ProfileManager if available, otherwise use config
+        let zonesToLoad;
+        if (this._profileManager) {
+            // Re-read profiles from disk to pick up changes from prefs window
+            this._profileManager.load();
+            const activeProfile = this._profileManager.getActiveProfile();
+            const profileConfig = this._profileManager.loadProfileConfig(activeProfile);
+            zonesToLoad = profileConfig.zones || [];
+            log(`Loading zones from profile: ${activeProfile}`);
+        } else {
+            zonesToLoad = config.zones || [];
+        }
+
+        zonesToLoad.forEach(zoneData => {
             this._zones.push(new Zone(zoneData, config.tabBar, this._windowTracker));
         });
 

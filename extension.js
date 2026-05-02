@@ -9,6 +9,8 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { WindowManager } from './modules/WindowManager.js';
 import { ConfigManager } from './modules/ConfigManager.js';
 import { Highlighter } from './modules/Highlighter.js';
+import { ProfileManager } from './modules/ProfileManager.js';
+import { SystemTray } from './modules/SystemTray.js';
 
 const log = msg => console.log(`[TabbedTiling] ${msg}`);
 
@@ -22,28 +24,40 @@ export default class TabbedTilingExtension extends Extension {
         this._configManager = null;
         this._windowManager = null;
         this._highlighter = null;
+        this._profileManager = null;
+        this._systemTray = null;
         this._configFileMonitor = null;
         this._previewFileMonitor = null;
+        this._profilesFileMonitor = null;
         this._settings = null;
     }
 
     enable() {
-        // Don’t render tabs/overlays on lock screen or other non-user modes.
+        // Don't render tabs/overlays on lock screen or other non-user modes.
         // This prevents tab bars showing above the lock UI.
         if (Main.sessionMode.currentMode !== 'user') {
             return;
-        }    
+        }
         log('Enabling...');
 
         this._settings = this.getSettings();
         this._configManager = new ConfigManager();
         this._highlighter = new Highlighter();
-        this._windowManager = new WindowManager(this._configManager, this._highlighter);
+        this._profileManager = new ProfileManager().load();
+        this._windowManager = new WindowManager(this._configManager, this._highlighter, this._profileManager);
 
         try {
             this._windowManager.enable();
             this._addKeybindings();
             this._monitorConfigFiles();
+
+            // System tray icon for profile switching
+            this._systemTray = new SystemTray(this._profileManager, (profileName) => {
+                log(`Profile switched via tray: ${profileName}`);
+                this._windowManager.reloadConfiguration();
+            });
+            Main.panel.addToStatusArea('tabbedtiling-profile-switcher', this._systemTray);
+
             log('Enabled successfully.');
         } catch (e) {
             log(`Error during enable: ${e}`);
@@ -64,6 +78,15 @@ export default class TabbedTilingExtension extends Extension {
             this._previewFileMonitor.cancel();
             this._previewFileMonitor = null;
         }
+        if (this._profilesFileMonitor) {
+            this._profilesFileMonitor.cancel();
+            this._profilesFileMonitor = null;
+        }
+
+        if (this._systemTray) {
+            this._systemTray.destroy();
+            this._systemTray = null;
+        }
 
         if (this._windowManager) {
             this._windowManager.disable();
@@ -76,6 +99,7 @@ export default class TabbedTilingExtension extends Extension {
         }
 
         this._configManager = null;
+        this._profileManager = null;
         this._settings = null;
         log('Disabled.');
     }
@@ -130,5 +154,25 @@ export default class TabbedTilingExtension extends Extension {
                 }
             }
         });
+
+        // Monitor profiles.json for active profile changes from prefs window
+        const profilesFile = Gio.File.new_for_path(
+            GLib.build_filenamev([GLib.get_user_config_dir(), 'tabbedtiling', 'profiles.json'])
+        );
+        if (profilesFile.query_exists(null)) {
+            this._profilesFileMonitor = profilesFile.monitor(Gio.FileMonitorFlags.NONE, null);
+            this._profilesFileMonitor.connect('changed', (monitor, file, otherFile, eventType) => {
+                if (eventType === Gio.FileMonitorEvent.CHANGES_DONE_HINT) {
+                    log('Profiles file changed, reloading configuration...');
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+                        this._windowManager.reloadConfiguration();
+                        // Refresh tray menu to show updated profiles/active state
+                        if (this._systemTray)
+                            this._systemTray.refresh();
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+            });
+        }
     }
 }
