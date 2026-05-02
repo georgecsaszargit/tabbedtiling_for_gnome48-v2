@@ -86,6 +86,38 @@ export class WindowManager {
         this._highlighter.hideHoverHighlight();
     }
 
+    /**
+     * Pause tiling: destroy all zones, unsnap windows, disconnect signals.
+     * The extension remains loaded but inactive.
+     */
+    pause() {
+        log("Pausing tiling...");
+        this._disconnectSignals();
+        this._zones.forEach(zone => zone.destroy());
+        this._zones = [];
+        this._highlighter.hideHoverHighlight();
+        this._isPaused = true;
+        log("Tiling paused.");
+    }
+
+    /**
+     * Resume tiling: reload configuration, reconnect signals, re-snap windows.
+     */
+    resume() {
+        log("Resuming tiling...");
+        this._isPaused = false;
+        this.reloadConfiguration();
+        this._connectSignals();
+        this._updateAllZonesVisibility();
+        this._snapExistingWindows();
+        this._onFocusChanged();
+        log("Tiling resumed.");
+    }
+
+    get isPaused() {
+        return !!this._isPaused;
+    }
+
     reloadConfiguration() {
         log("DEBUG: reloadConfiguration() called.");
         const config = this._configManager.load();

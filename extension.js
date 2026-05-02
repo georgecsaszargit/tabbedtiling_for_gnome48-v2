@@ -46,15 +46,29 @@ export default class TabbedTilingExtension extends Extension {
         this._profileManager = new ProfileManager().load();
         this._windowManager = new WindowManager(this._configManager, this._highlighter, this._profileManager);
 
+        // Read persisted enabled state
+        this._tilingEnabled = this._settings.get_boolean('tiling-enabled');
+
         try {
-            this._windowManager.enable();
+            if (this._tilingEnabled) {
+                this._windowManager.enable();
+            }
             this._addKeybindings();
             this._monitorConfigFiles();
 
-            // System tray icon for profile switching
-            this._systemTray = new SystemTray(this._profileManager, (profileName) => {
-                log(`Profile switched via tray: ${profileName}`);
-                this._windowManager.reloadConfiguration();
+            // System tray icon for profile switching, toggle, and settings
+            this._systemTray = new SystemTray(this._profileManager, {
+                onProfileChanged: (profileName) => {
+                    log(`Profile switched via tray: ${profileName}`);
+                    if (this._tilingEnabled) {
+                        this._windowManager.reloadConfiguration();
+                    }
+                },
+                onToggle: (enabled) => {
+                    this._setTilingEnabled(enabled);
+                },
+                getEnabled: () => this._tilingEnabled,
+                extensionUuid: this.metadata.uuid || 'tabbedtiling@george.com',
             });
             Main.panel.addToStatusArea('tabbedtiling-profile-switcher', this._systemTray);
 
@@ -62,6 +76,25 @@ export default class TabbedTilingExtension extends Extension {
         } catch (e) {
             log(`Error during enable: ${e}`);
             this.disable();
+        }
+    }
+
+    _setTilingEnabled(enabled) {
+        if (enabled === this._tilingEnabled) return;
+
+        this._tilingEnabled = enabled;
+        this._settings.set_boolean('tiling-enabled', enabled);
+
+        if (enabled) {
+            log('Tiling enabled via system tray.');
+            this._windowManager.resume();
+        } else {
+            log('Tiling disabled via system tray.');
+            this._windowManager.pause();
+            // Also clear any live-edit preview overlays
+            if (this._highlighter) {
+                this._highlighter.destroyPreviews();
+            }
         }
     }
 
@@ -134,9 +167,12 @@ export default class TabbedTilingExtension extends Extension {
         this._configFileMonitor = configFile.monitor(Gio.FileMonitorFlags.NONE, null);
         this._configFileMonitor.connect('changed', (monitor, file, otherFile, eventType) => {
             if (eventType === Gio.FileMonitorEvent.CHANGES_DONE_HINT) {
+                if (!this._tilingEnabled) return;
                 log('Config file changed, reloading zones...');
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
-                    this._windowManager.reloadConfiguration();
+                    if (this._tilingEnabled) {
+                        this._windowManager.reloadConfiguration();
+                    }
                     return GLib.SOURCE_REMOVE;
                 });
             }
@@ -148,9 +184,16 @@ export default class TabbedTilingExtension extends Extension {
         this._previewFileMonitor.connect('changed', (monitor, file, otherFile, eventType) => {
             if (eventType === Gio.FileMonitorEvent.CHANGES_DONE_HINT) {
                 log('Preview file changed, showing preview...');
-                const zones = this._configManager.loadPreviewZones();
-                if (zones) {
-                    this._highlighter.showAllPreviews(zones);
+                const previewData = this._configManager.loadPreviewZones();
+                if (previewData) {
+                    // Support both array format and object format with persistent flag
+                    const zones = Array.isArray(previewData) ? previewData : (previewData.zones || []);
+                    const persistent = !Array.isArray(previewData) && previewData.persistent === true;
+                    if (zones.length === 0) {
+                        this._highlighter.destroyPreviews();
+                    } else {
+                        this._highlighter.showAllPreviews(zones, persistent);
+                    }
                 }
             }
         });
@@ -165,8 +208,10 @@ export default class TabbedTilingExtension extends Extension {
                 if (eventType === Gio.FileMonitorEvent.CHANGES_DONE_HINT) {
                     log('Profiles file changed, reloading configuration...');
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
-                        this._windowManager.reloadConfiguration();
-                        // Refresh tray menu to show updated profiles/active state
+                        if (this._tilingEnabled) {
+                            this._windowManager.reloadConfiguration();
+                        }
+                        // Always refresh tray menu to show updated profiles/active state
                         if (this._systemTray)
                             this._systemTray.refresh();
                         return GLib.SOURCE_REMOVE;

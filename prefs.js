@@ -238,7 +238,7 @@ function saveProfileZones(profileName, zones) {
  */
 const ZoneEditorRow = GObject.registerClass(
 class ZoneEditorRow extends Adw.ExpanderRow {
-    _init(zoneData, onRemove) {
+    _init(zoneData, onRemove, onChanged) {
         super._init({
             title: zoneData?.name || _('Unnamed Zone'),
             subtitle: `X:${zoneData?.x ?? 0}, Y:${zoneData?.y ?? 0}, W:${zoneData?.width ?? 0}, H:${zoneData?.height ?? 0}`,
@@ -246,6 +246,7 @@ class ZoneEditorRow extends Adw.ExpanderRow {
         });
 
         this._onRemove = onRemove;
+        this._onChanged = onChanged;
         // Normalize legacy 'gap' into per-side gaps if present
         const legacyGap = (zoneData?.gap ?? null);
         const normGaps = (zoneData?.gaps && typeof zoneData.gaps === 'object')
@@ -286,11 +287,14 @@ class ZoneEditorRow extends Adw.ExpanderRow {
         const grid = new Gtk.Grid({ column_spacing: 12, row_spacing: 6, margin_top: 6, margin_bottom: 6 });
         this.add_row(grid);
 
-        // Helper builders
+        // Helper builders — each calls _notifyChanged() after updating the zone data
         const labeledEntry = (label, initial, onChanged) => {
             const row = new Adw.ActionRow({ title: label });
             const entry = new Gtk.Entry({ hexpand: true, text: `${initial ?? ''}` });
-            entry.connect('changed', () => onChanged(entry.get_text()));
+            entry.connect('changed', () => {
+                onChanged(entry.get_text());
+                this._notifyChanged();
+            });
             row.add_suffix(entry);
             row.activatable_widget = entry;
             return [row, entry];
@@ -300,7 +304,10 @@ class ZoneEditorRow extends Adw.ExpanderRow {
             const row = new Adw.ActionRow({ title: label });
             const adj = new Gtk.Adjustment({ lower: min, upper: max, step_increment: step, page_increment: step * 10, value: initial });
             const spin = new Gtk.SpinButton({ halign: Gtk.Align.END, adjustment: adj, climb_rate: 1, digits: 0 });
-            spin.connect('value-changed', () => onChanged(spin.get_value_as_int()));
+            spin.connect('value-changed', () => {
+                onChanged(spin.get_value_as_int());
+                this._notifyChanged();
+            });
             row.add_suffix(spin);
             row.activatable_widget = spin;
             return [row, spin];
@@ -317,6 +324,7 @@ class ZoneEditorRow extends Adw.ExpanderRow {
             });
             sw.connect('state-set', (_w, state) => {
                 onChanged(state);
+                this._notifyChanged();
                 return false; // allow default
             });
             row.add_suffix(sw);
@@ -363,6 +371,12 @@ class ZoneEditorRow extends Adw.ExpanderRow {
         // Current rows occupy 0..9 after adding Gap Top/Right/Bottom/Left.
         // Attach Primary Zone on the next free row index to ensure it appears at the end.
         grid.attach(primRow, 0, 10, 1, 1);
+    }
+
+    _notifyChanged() {
+        if (typeof this._onChanged === 'function') {
+            this._onChanged();
+        }
     }
 
     _refreshSubtitle() {
@@ -1125,6 +1139,20 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         });
         profilesPage.add(zonesGroup);
 
+        // Live Edit switch — shows real-time preview overlays when editing zone values
+        const liveEditRow = new Adw.ActionRow({
+            title: _('Live Edit'),
+            subtitle: _('Show real-time zone boundary overlays while editing'),
+        });
+        const liveEditSwitch = new Gtk.Switch({
+            active: false,
+            halign: Gtk.Align.END,
+            valign: Gtk.Align.CENTER,
+        });
+        liveEditRow.add_suffix(liveEditSwitch);
+        liveEditRow.activatable_widget = liveEditSwitch;
+        zonesGroup.add(liveEditRow);
+
         // Add New Zone header with button
         const addRow = new Adw.ActionRow({ title: _('Add New Zone'), subtitle: _('Insert a new zone with default values') });
         const addBtn = new Gtk.Button({ label: _('Add') });
@@ -1134,6 +1162,81 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
 
         // Zone rows storage for this page
         let zoneRows = [];
+
+        // --- Live Edit: debounced preview writer ---
+        let liveEditTimerId = 0;
+        const LIVE_EDIT_DEBOUNCE_MS = 300;
+
+        const writeLivePreview = () => {
+            if (!liveEditSwitch.get_active()) return;
+
+            // Cancel any pending debounce
+            if (liveEditTimerId) {
+                GLib.Source.remove(liveEditTimerId);
+                liveEditTimerId = 0;
+            }
+
+            liveEditTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, LIVE_EDIT_DEBOUNCE_MS, () => {
+                liveEditTimerId = 0;
+                try {
+                    const zones = zoneRows.map(r => r.getZone()).filter(z => z.width > 0 && z.height > 0);
+                    const previewData = JSON.stringify({ zones, persistent: true });
+                    const file = Gio.File.new_for_path(PREVIEW_PATH);
+                    file.replace_contents(
+                        new TextEncoder().encode(previewData),
+                        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null
+                    );
+                    log('Live Edit: preview written');
+                } catch (e) {
+                    log(`Live Edit: error writing preview: ${e}`);
+                }
+                return GLib.SOURCE_REMOVE;
+            });
+        };
+
+        const clearLivePreview = () => {
+            // Cancel pending timer
+            if (liveEditTimerId) {
+                GLib.Source.remove(liveEditTimerId);
+                liveEditTimerId = 0;
+            }
+            // Write empty zones to clear the overlay
+            try {
+                const file = Gio.File.new_for_path(PREVIEW_PATH);
+                const previewData = JSON.stringify({ zones: [], persistent: false });
+                file.replace_contents(
+                    new TextEncoder().encode(previewData),
+                    null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null
+                );
+                log('Live Edit: preview cleared');
+            } catch (e) {
+                log(`Live Edit: error clearing preview: ${e}`);
+            }
+        };
+
+        // Live Edit switch handler
+        liveEditSwitch.connect('state-set', (_w, state) => {
+            if (state) {
+                // Immediately write a preview on enable
+                writeLivePreview();
+            } else {
+                clearLivePreview();
+            }
+            return false;
+        });
+
+        // Cleanup on window close
+        window.connect('close-request', () => {
+            if (liveEditSwitch.get_active()) {
+                clearLivePreview();
+            }
+            return false; // allow default close
+        });
+
+        // The onChanged callback passed to each ZoneEditorRow
+        const onZoneChanged = () => {
+            writeLivePreview();
+        };
 
         // Function to load zones for a profile
         const loadZonesForProfile = (profileName) => {
@@ -1147,7 +1250,8 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                 const row = new ZoneEditorRow(z, (rowSelf) => {
                     zonesGroup.remove(rowSelf);
                     zoneRows = zoneRows.filter(r => r !== rowSelf);
-                });
+                    onZoneChanged(); // update preview when zone removed
+                }, onZoneChanged);
                 zoneRows.push(row);
                 zonesGroup.add(row);
             }
@@ -1168,7 +1272,8 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             const row = new ZoneEditorRow(initial, (rowSelf) => {
                 zonesGroup.remove(rowSelf);
                 zoneRows = zoneRows.filter(r => r !== rowSelf);
-            });
+                onZoneChanged(); // update preview when zone removed
+            }, onZoneChanged);
             zoneRows.push(row);
             zonesGroup.add(row);
         });
@@ -1210,10 +1315,12 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                 const row = new ZoneEditorRow(zoneData, (rowSelf) => {
                     zonesGroup.remove(rowSelf);
                     zoneRows = zoneRows.filter(r => r !== rowSelf);
-                });
+                    onZoneChanged();
+                }, onZoneChanged);
                 zoneRows.push(row);
                 zonesGroup.add(row);
             }
+            onZoneChanged(); // trigger preview after generating zones
             this._toast(window, _(`Generated ${numZones} zones for monitor ${monitorIndex} (${activeProfile} profile).`));
         });
 

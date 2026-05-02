@@ -16,5 +16,10 @@
       <summary>Toggle Tab Bar Layer</summary>
       <description>Keybinding to move tab bars behind all windows and make them non-interactive. Press again to restore.</description>
     </key>
+    <key name="tiling-enabled" type="b">
+      <default>true</default>
+      <summary>Tiling enabled</summary>
+      <description>Whether the tiling behavior is active. When false, all zones are destroyed and windows are unsnapped.</description>
+    </key>
   </schema>
 </schemalist>

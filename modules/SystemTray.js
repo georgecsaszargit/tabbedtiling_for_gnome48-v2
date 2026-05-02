@@ -1,4 +1,4 @@
-// modules/SystemTray.js — Panel indicator for quick profile switching
+// modules/SystemTray.js — Panel indicator for quick profile switching, toggle, and settings
 import GObject from 'gi://GObject';
 import St from 'gi://St';
 import GLib from 'gi://GLib';
@@ -11,11 +11,14 @@ const log = msg => console.log(`[TabbedTiling.SystemTray] ${msg}`);
 
 export const SystemTray = GObject.registerClass(
 class SystemTray extends PanelMenu.Button {
-    _init(profileManager, onProfileChanged) {
+    _init(profileManager, { onProfileChanged, onToggle, getEnabled, extensionUuid }) {
         super._init(0.0, 'TabbedTiling Profile Switcher', false);
 
         this._profileManager = profileManager;
         this._onProfileChanged = onProfileChanged;
+        this._onToggle = onToggle;
+        this._getEnabled = getEnabled;
+        this._extensionUuid = extensionUuid || 'tabbedtiling@george.com';
 
         // Panel icon
         this._icon = new St.Icon({
@@ -31,6 +34,20 @@ class SystemTray extends PanelMenu.Button {
     _buildMenu() {
         this.menu.removeAll();
 
+        // ---- Enable/Disable Toggle ----
+        const isEnabled = typeof this._getEnabled === 'function' ? this._getEnabled() : true;
+        this._toggleItem = new PopupMenu.PopupSwitchMenuItem('Enable Tiling', isEnabled);
+        this._toggleItem.connect('toggled', (item, state) => {
+            if (typeof this._onToggle === 'function') {
+                this._onToggle(state);
+            }
+        });
+        this.menu.addMenuItem(this._toggleItem);
+
+        // ---- Separator ----
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        // ---- Profile list ----
         const profiles = this._profileManager.getProfiles();
         const activeProfile = this._profileManager.getActiveProfile();
 
@@ -50,6 +67,16 @@ class SystemTray extends PanelMenu.Button {
 
             this.menu.addMenuItem(item);
         }
+
+        // ---- Separator ----
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        // ---- Settings ----
+        const settingsItem = new PopupMenu.PopupMenuItem('Settings');
+        settingsItem.connect('activate', () => {
+            this._openSettings();
+        });
+        this.menu.addMenuItem(settingsItem);
     }
 
     _switchProfile(name) {
@@ -65,6 +92,27 @@ class SystemTray extends PanelMenu.Button {
         // Notify extension to reload zones
         if (typeof this._onProfileChanged === 'function') {
             this._onProfileChanged(name);
+        }
+    }
+
+    _openSettings() {
+        try {
+            const subprocess = Gio.Subprocess.new(
+                ['gnome-extensions', 'prefs', this._extensionUuid],
+                Gio.SubprocessFlags.NONE
+            );
+            log('Opening extension preferences...');
+        } catch (e) {
+            log(`Failed to open settings: ${e}`);
+        }
+    }
+
+    /**
+     * Update the toggle switch state without triggering the callback.
+     */
+    setToggleState(enabled) {
+        if (this._toggleItem) {
+            this._toggleItem.setToggleState(enabled);
         }
     }
 
