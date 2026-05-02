@@ -20,6 +20,7 @@ export const Tab = GObject.registerClass({
         this.window = window;
         this.app = app;
         this._config = config; // Save config        
+        this._destroyed = false;
 
         const box = new St.BoxLayout({
             style_class: 'zone-tab-content',
@@ -30,7 +31,7 @@ export const Tab = GObject.registerClass({
         // App Icon
         if (app) {
             const icon = new St.Icon({
-                gicon: app.get_icon(),
+                gicon: app ? app.get_icon() : null,
                 style_class: 'zone-tab-app-icon',
                 icon_size: this._config.iconSize ?? 16,                
             });
@@ -58,54 +59,97 @@ export const Tab = GObject.registerClass({
             icon_name: 'window-close-symbolic',
             icon_size: this._config.closeButtonSize ?? 12,
         }));
-        closeButton.connect('clicked', () => this.emit('close-clicked'));
+        closeButton.connect('clicked', () => {
+            try {
+                this.emit('close-clicked');
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error emitting close-clicked');
+            }
+        });
         box.add_child(closeButton);
 
         // Connect to window title changes to update the tab
-        this._titleChangedId = window.connect('notify::title', () => {
-            label.set_text(this.getTabTitle());
-        });
+        try {
+            this._titleChangedId = window.connect('notify::title', () => {
+                if (this._destroyed || !this.window) return;
+                try {
+                    label.set_text(this.getTabTitle());
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Error updating tab title');
+                }
+            });
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error connecting title signal in Tab constructor');
+            this._titleChangedId = null;
+        }
     }
 
     getTabTitle() {
-        const source = this._config.titleSource ?? 'windowTitle';
-        if (source === 'appName' && this.app) return this.app.get_name();
-        if (source === 'wmClass') return this.window.get_wm_class();
+        try {
+            const source = this._config.titleSource ?? 'windowTitle';
+            if (source === 'appName' && this.app) return this.app.get_name();
+            if (source === 'wmClass') return this.window.get_wm_class() ?? '';
 
-        // Default to window title with fallbacks
-        return this.window.get_title() || (this.app ? this.app.get_name() : null) || this.window.get_wm_class() || 'Untitled';
+            // Default to window title with fallbacks
+            return this.window.get_title() || (this.app ? this.app.get_name() : null) || this.window.get_wm_class() || 'Untitled';
+        } catch (e) {
+            return 'Unknown';
+        }
     }
 
     getGroupingId() {
-        const criteria = this._config.groupingCriteria ?? 'appName';
-        if (criteria === 'wmClass') return this.window.get_wm_class();
-        // Default to app name
-        return this.app ? this.app.get_id() : (this.window.get_wm_class() || 'unknown');
+        try {
+            const criteria = this._config.groupingCriteria ?? 'appName';
+            if (criteria === 'wmClass') return this.window.get_wm_class() ?? '';
+            // Default to app name
+            return this.app ? this.app.get_id() : (this.window.get_wm_class() ?? 'unknown');
+        } catch (e) {
+            return 'unknown';
+        }
     }
 
     getSortKey() {
-        const criteria = this._config.sortingCriteria ?? 'windowTitle';
-        if (criteria === 'appName' && this.app) return this.app.get_name();
-        if (criteria === 'wmClass') return this.window.get_wm_class();
+        try {
+            const criteria = this._config.sortingCriteria ?? 'windowTitle';
+            if (criteria === 'appName' && this.app) return this.app.get_name();
+            if (criteria === 'wmClass') return this.window.get_wm_class() ?? '';
 
-        // Default to window title with fallbacks
-        return this.window.get_title() || (this.app ? this.app.get_name() : null) || this.window.get_wm_class() || 'Untitled';
+            // Default to window title with fallbacks
+            return this.window.get_title() || (this.app ? this.app.get_name() : null) || this.window.get_wm_class() || 'Untitled';
+        } catch (e) {
+            return 'unknown';
+        }
     }
 
     getGroupSortKey() {
-        const criteria = this._config.groupingCriteria ?? 'appName';
-        if (criteria === 'wmClass') return this.window.get_wm_class() || 'unknown';
-        // Default to app name, using the *display name* for sorting
-        return this.app ? this.app.get_name() : (this.window.get_wm_class() || 'unknown');
+        try {
+            const criteria = this._config.groupingCriteria ?? 'appName';
+            if (criteria === 'wmClass') return this.window.get_wm_class() ?? 'unknown';
+            // Default to app name, using the *display name* for sorting
+            return this.app ? this.app.get_name() : (this.window.get_wm_class() ?? 'unknown');
+        } catch (e) {
+            return 'unknown';
+        }
     }
 
     destroy() {
-        if (this._titleChangedId && this.window) {
-            try {
-                this.window.disconnect(this._titleChangedId);
-            } catch (e) { /* ignore */ }
+        if (this._destroyed) return;
+        this._destroyed = true;
+        try {
+            if (this.window && this._titleChangedId) {
+                try {
+                    this.window.disconnect(this._titleChangedId);
+                } catch (e) { /* ignore */ }
+            }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in Tab.destroy');
         }
-       
-        super.destroy();
+        this._titleChangedId = 0;
+        this.window = null;
+        this.app = null;
+
+        try {
+            super.destroy();
+        } catch (e) { }
     }
 });

@@ -148,18 +148,22 @@ function createDefaultProfiles() {
     };
     saveProfiles(profiles);
     // Create default profile directory
-    ensureProfilesDir();
-    const defaultZones = { zones: [] };
-    const profileDir = Gio.File.new_for_path(GLib.build_filenamev([PROFILES_DIR, 'Default']));
-    if (!profileDir.query_exists(null)) {
-        profileDir.make_directory_with_parents(null);
+    try {
+        ensureProfilesDir();
+        const defaultZones = { zones: [] };
+        const profileDir = Gio.File.new_for_path(GLib.build_filenamev([PROFILES_DIR, 'Default']));
+        if (!profileDir.query_exists(null)) {
+            profileDir.make_directory_with_parents(null);
+        }
+        const zonesPath = GLib.build_filenamev([PROFILES_DIR, 'Default', 'zones.json']);
+        const zonesFile = Gio.File.new_for_path(zonesPath);
+        zonesFile.replace_contents(
+            new TextEncoder().encode(JSON.stringify(defaultZones, null, 2)),
+            null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null
+        );
+    } catch (e) {
+        log(`Error creating default profile directory/files: ${e}`);
     }
-    const zonesPath = GLib.build_filenamev([PROFILES_DIR, 'Default', 'zones.json']);
-    const zonesFile = Gio.File.new_for_path(zonesPath);
-    zonesFile.replace_contents(
-        new TextEncoder().encode(JSON.stringify(defaultZones, null, 2)),
-        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null
-    );
     return profiles;
 }
 
@@ -614,15 +618,12 @@ class ProfileSelectorCard extends Adw.Bin {
     }
 
     _refreshProfiles() {
-        // Clear existing list
-        let children;
-        try {
-            children = this._profileListBox.get_children();
-        } catch (e) {
-            children = [];
-        }
-        for (let i = children.length - 1; i >= 0; i--) {
-            this._profileListBox.remove(children[i]);
+        // Clear existing list (GTK4-compatible iteration)
+        let child = this._profileListBox.get_first_child();
+        while (child) {
+            const next = child.get_next_sibling();
+            this._profileListBox.remove(child);
+            child = next;
         }
 
         // Load profiles
@@ -873,15 +874,12 @@ class ProfileManagementDialog extends Gtk.Popover {
         const data = loadProfiles();
         this._profiles = data.profiles;
 
-        // Clear list
-        let children;
-        try {
-            children = this._profileListBox.get_children();
-        } catch (e) {
-            children = [];
-        }
-        for (let i = children.length - 1; i >= 0; i--) {
-            this._profileListBox.remove(children[i]);
+        // Clear list (GTK4-compatible iteration)
+        let child = this._profileListBox.get_first_child();
+        while (child) {
+            const next = child.get_next_sibling();
+            this._profileListBox.remove(child);
+            child = next;
         }
 
         // Add profile rows
@@ -932,15 +930,19 @@ class ProfileManagementDialog extends Gtk.Popover {
                     saveProfiles(data);
 
                     // Create profile directory
-                    ensureProfilesDir();
-                    const profileDir = Gio.File.new_for_path(GLib.build_filenamev([PROFILES_DIR, name]));
-                    profileDir.make_directory_with_parents(null);
-                    const zonesPath = GLib.build_filenamev([PROFILES_DIR, name, 'zones.json']);
-                    const zonesFile = Gio.File.new_for_path(zonesPath);
-                    zonesFile.replace_contents(
-                        new TextEncoder().encode(JSON.stringify({ zones: [] }, null, 2)),
-                        null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null
-                    );
+                    try {
+                        ensureProfilesDir();
+                        const profileDir = Gio.File.new_for_path(GLib.build_filenamev([PROFILES_DIR, name]));
+                        profileDir.make_directory_with_parents(null);
+                        const zonesPath = GLib.build_filenamev([PROFILES_DIR, name, 'zones.json']);
+                        const zonesFile = Gio.File.new_for_path(zonesPath);
+                        zonesFile.replace_contents(
+                            new TextEncoder().encode(JSON.stringify({ zones: [] }, null, 2)),
+                            null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null
+                        );
+                    } catch (e) {
+                        log(`Error creating profile directory/files: ${e}`);
+                    }
 
                     this._loadProfiles();
                     if (this._onProfilesChanged) {
@@ -1142,6 +1144,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         return spin;
     }
     fillPreferencesWindow(window) {
+      try {
         // Make sure Adw preferences styling is initialized
         Adw.init();
 
@@ -1311,6 +1314,11 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
 
         // Cleanup on window close
         window.connect('close-request', () => {
+            // Always cancel any pending debounce timer
+            if (liveEditTimerId) {
+                GLib.Source.remove(liveEditTimerId);
+                liveEditTimerId = 0;
+            }
             if (liveEditSwitch.get_active()) {
                 clearLivePreview();
             }
@@ -1381,7 +1389,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             const rowsToRemove = zoneRows.filter(r => r.getZone().monitorIndex === monitorIndex);
             rowsToRemove.forEach(r => {
                 zonesGroup.remove(r);
-                zoneRows = zoneRows.filter(r => r !== r);
+                zoneRows = zoneRows.filter(row => row !== r);
             });
 
             // Calculate and add new zones
@@ -1474,15 +1482,19 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                         data.profiles.push({ name, createdAt: new Date().toISOString() });
                         saveProfiles(data);
                         // Create profile directory
-                        ensureProfilesDir();
-                        const profileDir = Gio.File.new_for_path(GLib.build_filenamev([PROFILES_DIR, name]));
-                        profileDir.make_directory_with_parents(null);
-                        const zonesPath = GLib.build_filenamev([PROFILES_DIR, name, 'zones.json']);
-                        const zonesFile = Gio.File.new_for_path(zonesPath);
-                        zonesFile.replace_contents(
-                            new TextEncoder().encode(JSON.stringify({ zones: [] }, null, 2)),
-                            null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null
-                        );
+                        try {
+                            ensureProfilesDir();
+                            const profileDir = Gio.File.new_for_path(GLib.build_filenamev([PROFILES_DIR, name]));
+                            profileDir.make_directory_with_parents(null);
+                            const zonesPath = GLib.build_filenamev([PROFILES_DIR, name, 'zones.json']);
+                            const zonesFile = Gio.File.new_for_path(zonesPath);
+                            zonesFile.replace_contents(
+                                new TextEncoder().encode(JSON.stringify({ zones: [] }, null, 2)),
+                                null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null
+                            );
+                        } catch (e) {
+                            log(`Error creating profile directory/files: ${e}`);
+                        }
                         // Refresh dropdown
                         profileModel.append(name);
                         profileNames.push(name);
@@ -1863,6 +1875,9 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                 this._toast(window, _('Failed to save settings.'));
             }
         });
+      } catch (e) {
+        logError(e, 'TabbedTiling Prefs: Error in fillPreferencesWindow');
+      }
     }
 
     _addZoneRow(zoneOrNull, zonesGroup, bounds) {

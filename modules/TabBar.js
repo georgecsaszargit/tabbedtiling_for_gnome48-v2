@@ -9,7 +9,13 @@ import Gio from 'gi://Gio';
 import { Tab } from './Tab.js';
 
 // The correct way to get the extension's root path from within an ES module.
-const Me = Gio.File.new_for_uri(import.meta.url).get_parent().get_parent();
+let extensionPath = '';
+try {
+    const Me = Gio.File.new_for_uri(import.meta.url).get_parent().get_parent();
+    extensionPath = Me.get_path();
+} catch (e) {
+    logError(e, 'TabbedTiling: Failed to get extension path');
+}
 
 const log = msg => console.log(`[TabbedTiling.TabBar] ${msg}`);
 
@@ -30,6 +36,7 @@ export const TabBar = GObject.registerClass({
             visible: false,
         });
 
+        this._destroyed = false;
         this.set_height(tabBarConfig.height || 32);
         this.style = `background-color: ${tabBarConfig.backgroundColor};`;
         this._config = tabBarConfig;
@@ -55,39 +62,61 @@ export const TabBar = GObject.registerClass({
         const btnStyle = 'zone-tab-close-button'; // Re-use style for consistent look
         const iconSize = 14;
         this._splitHorizontalButton = new St.Button({ style_class: btnStyle });
-        const horIconFile = Gio.File.new_for_path(Me.get_path() + '/icons/split-hor.png');
+        const horIconFile = Gio.File.new_for_path(extensionPath + '/icons/split-hor.png');
         this._splitHorizontalButton.set_child(new St.Icon({
             gicon: new Gio.FileIcon({ file: horIconFile }),
             icon_size: iconSize
         }));
-        this._splitHorizontalButton.connect('clicked', () => this.emit('split-clicked', 'horizontal'));
+        this._splitHorizontalButton.connect('clicked', () => {
+            try {
+                this.emit('split-clicked', 'horizontal');
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error emitting split-clicked horizontal');
+            }
+        });
         this.add_child(this._splitHorizontalButton);
 
         this._splitVerticalButton = new St.Button({ style_class: btnStyle, style: 'margin-left: 4px;' });
-        const verIconFile = Gio.File.new_for_path(Me.get_path() + '/icons/split-ver.png');
+        const verIconFile = Gio.File.new_for_path(extensionPath + '/icons/split-ver.png');
         this._splitVerticalButton.set_child(new St.Icon({
             gicon: new Gio.FileIcon({ file: verIconFile }),
             icon_size: iconSize
         }));
-        this._splitVerticalButton.connect('clicked', () => this.emit('split-clicked', 'vertical'));
+        this._splitVerticalButton.connect('clicked', () => {
+            try {
+                this.emit('split-clicked', 'vertical');
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error emitting split-clicked vertical');
+            }
+        });
         this.add_child(this._splitVerticalButton);
 
         this._mergeButton = new St.Button({ style_class: btnStyle, visible: false });
-        const fullIconFile = Gio.File.new_for_path(Me.get_path() + '/icons/full.png');
+        const fullIconFile = Gio.File.new_for_path(extensionPath + '/icons/full.png');
         this._mergeButton.set_child(new St.Icon({
             gicon: new Gio.FileIcon({ file: fullIconFile }),
             icon_size: iconSize
         }));
-        this._mergeButton.connect('clicked', () => this.emit('merge-clicked'));
+        this._mergeButton.connect('clicked', () => {
+            try {
+                this.emit('merge-clicked');
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error emitting merge-clicked');
+            }
+        });
         this.add_child(this._mergeButton);
     }
 
     updateActionButtons(isSplit, isChild) {
-        const canSplit = !isSplit; // A zone can be split as long as it's not already a parent.
-        this._splitHorizontalButton.visible = canSplit;
-        this._splitVerticalButton.visible = canSplit;
-        // The merge button is available on any child of a split.
-        this._mergeButton.visible = isChild;
+        try {
+            const canSplit = !isSplit; // A zone can be split as long as it's not already a parent.
+            this._splitHorizontalButton.visible = canSplit;
+            this._splitVerticalButton.visible = canSplit;
+            // The merge button is available on any child of a split.
+            this._mergeButton.visible = isChild;
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar.updateActionButtons');
+        }
     }
 
     /* ---------- tiny helpers to compose inline styles without clobbering ---------- */
@@ -130,54 +159,72 @@ export const TabBar = GObject.registerClass({
     /* ----------------------------------------------------------------------------- */
 
     addTab(window) {
-        if (this._tabs.has(window)) {
-            this.setActiveTab(window);
-            return;
-        }
-
-        const app = this._windowTracker.get_window_app(window);
-        const tab = new Tab(window, app, this._config);
-
-        tab.connect('close-clicked', () => this.emit('tab-removed', window));
-        tab.connect('button-press-event', (_actor, _event) => {
-            try {
-                // Instantly reflect intended focus so the clicked tab turns yellow right away.
-                // The real focus signal may arrive a bit later from Mutter.
-                this.reflectGlobalFocus(window);
-                this.emit('tab-clicked', window);
-            } catch (e) {
-                logError(e, 'Emitting tab-clicked failed');
+        try {
+            if (this._tabs.has(window)) {
+                this.setActiveTab(window);
+                return;
             }
-            return Clutter.EVENT_STOP;
-        });
 
-        this._tabs.set(window, tab);
-        this._tabContainer.add_child(tab);
+            const app = this._windowTracker.get_window_app(window);
+            const tab = new Tab(window, app, this._config);
 
-        this.reorderTabs();
+            tab.connect('close-clicked', () => {
+                try {
+                    this.emit('tab-removed', window);
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Error emitting tab-removed');
+                }
+            });
+            tab.connect('button-press-event', (_actor, _event) => {
+                try {
+                    // Instantly reflect intended focus so the clicked tab turns yellow right away.
+                    // The real focus signal may arrive a bit later from Mutter.
+                    this.reflectGlobalFocus(window);
+                    this.emit('tab-clicked', window);
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Error in tab button-press-event');
+                }
+                return Clutter.EVENT_STOP;
+            });
+
+            this._tabs.set(window, tab);
+            this._tabContainer.add_child(tab);
+
+            this.reorderTabs();
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar.addTab');
+        }
     }
 
     removeTab(window) {
-        if (this._tabs.has(window)) {
-            const tab = this._tabs.get(window);
-            this._tabContainer.remove_child(tab);
-            tab.destroy();
-            this._tabs.delete(window);
-            this.reorderTabs();
+        try {
+            if (this._tabs.has(window)) {
+                const tab = this._tabs.get(window);
+                this._tabContainer.remove_child(tab);
+                tab.destroy();
+                this._tabs.delete(window);
+                this.reorderTabs();
+            }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar.removeTab');
         }
     }
 
     setActiveTab(window) {
-        for (const [win, tab] of this._tabs.entries()) {
-            if (win === window) {
-                tab.add_style_class_name('active');
-                // settings-defined active bg
-                this._setBg(tab, this._activeBgColor);
-            } else {
-                tab.remove_style_class_name('active');
-                // clear bg override; fall back to CSS default
-                this._setBg(tab, '');
+        try {
+            for (const [win, tab] of this._tabs.entries()) {
+                if (win === window) {
+                    tab.add_style_class_name('active');
+                    // settings-defined active bg
+                    this._setBg(tab, this._activeBgColor);
+                } else {
+                    tab.remove_style_class_name('active');
+                    // clear bg override; fall back to CSS default
+                    this._setBg(tab, '');
+                }
             }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar.setActiveTab');
         }
     }
 
@@ -186,54 +233,71 @@ export const TabBar = GObject.registerClass({
      * Other zones' active tabs are dimmed to 50% opacity with the same color.
      */
     reflectGlobalFocus(focusedWindow) {
-        for (const [win, tab] of this._tabs.entries()) {
-            const isActiveInZone = tab.has_style_class_name('active');
-            if (win === focusedWindow) {
-                // Globally focused window → configured highlight color
-                this._setBg(tab, this._globalActiveBgColor);
-            } else if (isActiveInZone) {
-                // Active in its zone but not globally focused -> dim
-                this._setBg(tab, this._activeBgColor);
-            } else {
-                // Not active at all
-                this._setBg(tab, '');
+        try {
+            for (const [win, tab] of this._tabs.entries()) {
+                const isActiveInZone = tab.has_style_class_name('active');
+                if (win === focusedWindow) {
+                    // Globally focused window → configured highlight color
+                    this._setBg(tab, this._globalActiveBgColor);
+                } else if (isActiveInZone) {
+                    // Active in its zone but not globally focused -> dim
+                    this._setBg(tab, this._activeBgColor);
+                } else {
+                    // Not active at all
+                    this._setBg(tab, '');
+                }
             }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar.reflectGlobalFocus');
         }
     }
 
     reorderTabs(zoneName = 'Unknown') {
-        const tabs = this._tabContainer.get_children();
+        if (this._destroyed) return;
+        try {
+            const tabs = this._tabContainer.get_children();
 
-        if (tabs.length < 2) {
+            if (tabs.length < 2) {
+                this._updateGroupStyles();
+                return;
+            }
+
+            const sortOrder = (this._config.sortingOrder === 'DESC') ? -1 : 1;
+
+            tabs.sort((a, b) => {
+                try {
+                    const groupA = a.getGroupSortKey()?.toLowerCase() ?? '';
+                    const groupB = b.getGroupSortKey()?.toLowerCase() ?? '';
+
+                    if (groupA < groupB) return -1 * sortOrder;
+                    if (groupA > groupB) return 1 * sortOrder;
+
+                    const keyA = a.getSortKey()?.toLowerCase() ?? '';
+                    const keyB = b.getSortKey()?.toLowerCase() ?? '';
+
+                    let result = 0;
+                    if (keyA < keyB) result = -1;
+                    if (keyA > keyB) result = 1;
+
+                    return result * sortOrder;
+                } catch (e) {
+                    return 0; // Treat as equal on error
+                }
+            });
+
+            tabs.forEach((tab, index) => {
+                try {
+                    this._tabContainer.set_child_at_index(tab, index);
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Error in set_child_at_index during reorderTabs');
+                }
+            });
+
             this._updateGroupStyles();
-            return;
+            this._updateTabSizes();
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar.reorderTabs');
         }
-
-        const sortOrder = (this._config.sortingOrder === 'DESC') ? -1 : 1;
-
-        tabs.sort((a, b) => {
-            const groupA = a.getGroupSortKey()?.toLowerCase() ?? '';
-            const groupB = b.getGroupSortKey()?.toLowerCase() ?? '';
-
-            if (groupA < groupB) return -1 * sortOrder;
-            if (groupA > groupB) return 1 * sortOrder;
-
-            const keyA = a.getSortKey()?.toLowerCase() ?? '';
-            const keyB = b.getSortKey()?.toLowerCase() ?? '';
-
-            let result = 0;
-            if (keyA < keyB) result = -1;
-            if (keyA > keyB) result = 1;
-
-            return result * sortOrder;
-        });
-
-        tabs.forEach((tab, index) => {
-            this._tabContainer.set_child_at_index(tab, index);
-        });
-
-        this._updateGroupStyles();
-        this._updateTabSizes();
     }
 
     getTabs() {
@@ -241,85 +305,128 @@ export const TabBar = GObject.registerClass({
     }
 
     _updateTabSizes() {
-        const children = this._tabContainer.get_children();
-        if (children.length === 0) return;
+        try {
+            const children = this._tabContainer.get_children();
+            if (children.length === 0) return;
 
-        const availableWidth = this.get_width();
-        const maxWidth = this._config.maxWidth ?? 250;
+            const availableWidth = this.get_width();
+            if (availableWidth <= 0) return;
+            const maxWidth = this._config.maxWidth ?? 250;
 
-        const widestPreferred = children.reduce((max, c) => {
-            return Math.max(max, c.get_preferred_width(-1)[1]);
-        }, 0);
+            const widestPreferred = children.reduce((max, c) => {
+                return Math.max(max, c.get_preferred_width(-1)[1]);
+            }, 0);
 
-        const idealWidth = Math.min(widestPreferred, maxWidth);
+            const idealWidth = Math.min(widestPreferred, maxWidth);
 
-        if (idealWidth * children.length > availableWidth) {
-            const newWidth = Math.floor(availableWidth / children.length);
-            children.forEach(c => c.set_width(newWidth));
-        } else {
-            children.forEach(c => c.set_width(idealWidth));
+            if (idealWidth * children.length > availableWidth) {
+                const newWidth = Math.floor(availableWidth / children.length);
+                children.forEach(c => c.set_width(newWidth));
+            } else {
+                children.forEach(c => c.set_width(idealWidth));
+            }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar._updateTabSizes');
         }
     }
 
     _updateGroupStyles() {
-        const children = this._tabContainer.get_children();
-        const baseR = Number(this._config.cornerRadius ?? 8);
+        try {
+            const children = this._tabContainer.get_children();
+            const baseR = Number(this._config.cornerRadius ?? 8);
 
-        if (children.length <= 1) {
-            children.forEach(c => {
-                c.remove_style_class_name('grouped-start');
-                c.remove_style_class_name('grouped-middle');
-                c.remove_style_class_name('grouped-end');
-                // (1) Single tab → both corners rounded
-                this._setRadius(c, `${baseR}px ${baseR}px 0 0`);
-                // Not grouped → default border color from CSS, so clear any inline
-                this._setBorderColor(c, '');
-            });
-            return;
-        }
-
-        for (let i = 0; i < children.length; i++) {
-            const currentTab = children[i];
-            const prevTab = children[i - 1] ?? null;
-            const nextTab = children[i + 1] ?? null;
-
-            const currentId = currentTab.getGroupingId();
-            const prevId = prevTab ? prevTab.getGroupingId() : null;
-            const nextId = nextTab ? nextTab.getGroupingId() : null;
-
-            currentTab.remove_style_class_name('grouped-start');
-            currentTab.remove_style_class_name('grouped-middle');
-            currentTab.remove_style_class_name('grouped-end');
-
-            // Default (solo) → both rounded + default border
-            let radiusCss = `${baseR}px ${baseR}px 0 0`;
-            let borderColorCss = '';
-
-            if (currentId && currentId === nextId && currentId !== prevId) {
-                currentTab.add_style_class_name('grouped-start');
-                // (2)(3) First in group → only top-left
-                radiusCss = `${baseR}px 0 0 0`;
-                borderColorCss = this._groupBorderColor;
-            } else if (currentId && currentId === prevId && currentId === nextId) {
-                currentTab.add_style_class_name('grouped-middle');
-                // (6) Middle in group → no radii
-                radiusCss = `0`;
-                borderColorCss = this._groupBorderColor;
-            } else if (currentId && currentId === prevId && currentId !== nextId) {
-                currentTab.add_style_class_name('grouped-end');
-                // (4)(5) Last in group → only top-right
-                radiusCss = `0 ${baseR}px 0 0`;
-                borderColorCss = this._groupBorderColor;
+            if (children.length <= 1) {
+                children.forEach(c => {
+                    c.remove_style_class_name('grouped-start');
+                    c.remove_style_class_name('grouped-middle');
+                    c.remove_style_class_name('grouped-end');
+                    // (1) Single tab → both corners rounded
+                    this._setRadius(c, `${baseR}px ${baseR}px 0 0`);
+                    // Not grouped → default border color from CSS, so clear any inline
+                    this._setBorderColor(c, '');
+                });
+                return;
             }
 
-            this._setRadius(currentTab, radiusCss);
-            this._setBorderColor(currentTab, borderColorCss);
+            for (let i = 0; i < children.length; i++) {
+                const currentTab = children[i];
+                const prevTab = children[i - 1] ?? null;
+                const nextTab = children[i + 1] ?? null;
+
+                const currentId = currentTab.getGroupingId();
+                const prevId = prevTab ? prevTab.getGroupingId() : null;
+                const nextId = nextTab ? nextTab.getGroupingId() : null;
+
+                currentTab.remove_style_class_name('grouped-start');
+                currentTab.remove_style_class_name('grouped-middle');
+                currentTab.remove_style_class_name('grouped-end');
+
+                // Default (solo) → both rounded + default border
+                let radiusCss = `${baseR}px ${baseR}px 0 0`;
+                let borderColorCss = '';
+
+                if (currentId && currentId === nextId && currentId !== prevId) {
+                    currentTab.add_style_class_name('grouped-start');
+                    // (2)(3) First in group → only top-left
+                    radiusCss = `${baseR}px 0 0 0`;
+                    borderColorCss = this._groupBorderColor;
+                } else if (currentId && currentId === prevId && currentId === nextId) {
+                    currentTab.add_style_class_name('grouped-middle');
+                    // (6) Middle in group → no radii
+                    radiusCss = `0`;
+                    borderColorCss = this._groupBorderColor;
+                } else if (currentId && currentId === prevId && currentId !== nextId) {
+                    currentTab.add_style_class_name('grouped-end');
+                    // (4)(5) Last in group → only top-right
+                    radiusCss = `0 ${baseR}px 0 0`;
+                    borderColorCss = this._groupBorderColor;
+                }
+
+                this._setRadius(currentTab, radiusCss);
+                this._setBorderColor(currentTab, borderColorCss);
+            }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar._updateGroupStyles');
+        }
+    }
+
+    updateTabTitles() {
+        if (this._destroyed) return;
+        try {
+            for (const [_win, tab] of this._tabs.entries()) {
+                try {
+                    const label = tab.get_child()?.get_children()?.find(
+                        c => c instanceof St.Label
+                    );
+                    if (label) {
+                        label.set_text(tab.getTabTitle());
+                    }
+                } catch (e) {
+                    // skip individual tab errors
+                }
+            }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar.updateTabTitles');
         }
     }
 
     destroy() {
-        this._tabs.forEach(tab => tab.destroy());
-        this._tabs.clear();
-        super.destroy();
+        if (this._destroyed) return;
+        this._destroyed = true;
+        try {
+            this._tabs.forEach(tab => {
+                if (tab && !tab._destroyed) {
+                    try { tab.destroy(); } catch(e) {}
+                }
+            });
+            this._tabs.clear();
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar.destroy');
+        }
+        try {
+            super.destroy();
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in TabBar.super.destroy');
+        }
     }
 });

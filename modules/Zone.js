@@ -8,14 +8,31 @@ import { TabBar } from './TabBar.js';
 
 const log = msg => console.log(`[TabbedTiling.Zone] ${msg}`);
 
+// Fix 1 & 2: Module-level whitelist of safe config properties that may be
+// copied from zoneData JSON into a Zone instance.  EXCLUDES internal state
+// (anything starting with '_') and method names.
+const SAFE_ZONE_PROPS = [
+    'x', 'y', 'width', 'height',
+    'monitorIndex', 'splitDirection', 'splitRatio',
+    'childZones', 'layer', 'name', 'gaps', 'gap',
+];
+
 export class Zone {
     constructor(zoneData, tabBarConfig, windowTracker, parentZone = null) {
+        // Fix 8: destroyed guard
+        this._isDestroyed = false;
+
         this.childZones = [];
         this.splitDirection = 'none'; // 'horizontal', 'vertical', or 'none'
-        // Copy all properties from the config
-        Object.assign(this, zoneData);
 
-        // Set parentZone AFTER Object.assign to prevent it from being overwritten
+        // Fix 1: Only copy known safe configuration properties from zoneData
+        for (const key of SAFE_ZONE_PROPS) {
+            if (key in zoneData) {
+                this[key] = zoneData[key];
+            }
+        }
+
+        // Set parentZone AFTER property copy to prevent it from being overwritten
         // by a null value from the zoneData.
         this.parentZone = parentZone;        
         this._snappedWindows = new Set();
@@ -23,8 +40,10 @@ export class Zone {
         // Minimal MRU tracking: most-recently activated window first
         this._history = [];
         this._activeWindow = null;
-        // Allow monitor-wide “force hide” of tab bar during max/fullscreen
-        this._forceHidden = false; 
+        // Allow monitor-wide "force hide" of tab bar during max/fullscreen
+        this._forceHidden = false;
+        // Fix 3: Track pending timer/idle source IDs for cleanup
+        this._pendingSourceIds = new Set();
         
         this._tabBar = new TabBar(tabBarConfig);
         this._tabBar.connect('tab-clicked', (actor, window) => this.activateWindow(window));
@@ -39,7 +58,11 @@ export class Zone {
         });        
         // We connect this to an action that closes the actual window.
         this._tabBar.connect('tab-removed', (actor, window) => {
-            window.delete(global.get_current_time());
+            try {
+                window.delete(global.get_current_time());
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error deleting window');
+            }
         });
         this._tabBar.connect('tab-moved', (actor, { fromZone, toZone, window }) => {
             // This is a placeholder for inter-zone dragging logic
@@ -53,28 +76,80 @@ export class Zone {
         this._isTabBarInChrome = false; // State tracker for layer changes
     }
 
+    // Fix 3: Safe timer/idle helpers that track source IDs for cleanup
+    _safeTimeoutAdd(priority, interval, callback) {
+        const id = GLib.timeout_add(priority, interval, () => {
+            try {
+                this._pendingSourceIds?.delete(id);
+                // Fix 8: early exit if destroyed
+                if (this._isDestroyed) return GLib.SOURCE_REMOVE;
+                return callback();
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in Zone timeout callback');
+                return GLib.SOURCE_REMOVE;
+            }
+        });
+        this._pendingSourceIds?.add(id);
+        return id;
+    }
+
+    _safeIdleAdd(priority, callback) {
+        const id = GLib.idle_add(priority, () => {
+            try {
+                this._pendingSourceIds?.delete(id);
+                // Fix 8: early exit if destroyed
+                if (this._isDestroyed) return GLib.SOURCE_REMOVE;
+                return callback();
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in Zone idle callback');
+                return GLib.SOURCE_REMOVE;
+            }
+        });
+        this._pendingSourceIds?.add(id);
+        return id;
+    }
+
+    // Fix 4: Wrap setLayer in try-catch since it manipulates chrome
     setLayer(isBehind) {
         if (!this._tabBar) return;
 
-        if (isBehind && this._isTabBarInChrome) {
-            // It's currently in chrome, so move it to the background.
-            // removeChrome untracks the actor and removes it from the UI group.
-            Main.layoutManager.removeChrome(this._tabBar);
-            // Now add it to the background layer.
-            Main.layoutManager._backgroundGroup.add_child(this._tabBar);
-            this._tabBar.reactive = false; // Make it non-clickable
-            this._isTabBarInChrome = false;
-        } else if (!isBehind && !this._isTabBarInChrome) {
-            // It's currently in the background, so move it back to chrome.
-            // First, ensure it's removed from its current parent (the background group).
-            const parent = this._tabBar.get_parent();
-            if (parent) {
-                parent.remove_child(this._tabBar);
+        try {
+            if (isBehind && this._isTabBarInChrome) {
+                // It's currently in chrome, so move it to the background.
+                try {
+                    Main.layoutManager.removeChrome(this._tabBar);
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Failed to removeChrome in setLayer');
+                }
+                this._isTabBarInChrome = false; // Mark as removed regardless
+                try {
+                    Main.layoutManager._backgroundGroup.add_child(this._tabBar);
+                    this._tabBar.reactive = false; // Make it non-clickable
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Failed to add to backgroundGroup in setLayer');
+                }
+            } else if (!isBehind && !this._isTabBarInChrome) {
+                // It's currently in the background, so move it back to chrome.
+                // First, ensure it's removed from its current parent (the background group).
+                try {
+                    const parent = this._tabBar.get_parent?.();
+                    if (parent) {
+                        parent.remove_child(this._tabBar);
+                    }
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Failed to remove from parent in setLayer');
+                }
+                // addChrome re-adds it to the UI layer and tracks it again.
+                try {
+                    Main.layoutManager.addChrome(this._tabBar);
+                    this._tabBar.reactive = true; // Make it clickable again
+                    this._isTabBarInChrome = true; // Only set on success
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Failed to addChrome in setLayer');
+                }
             }
-            // addChrome re-adds it to the UI layer and tracks it again.
-            Main.layoutManager.addChrome(this._tabBar);
-            this._tabBar.reactive = true; // Make it clickable again
-            this._isTabBarInChrome = true;
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in Zone.setLayer');
         }
     }
 
@@ -93,7 +168,12 @@ export class Zone {
         }
     }
 
+    // Fix 7: Safe monitor getter with bounds check
     get monitor() {
+        if (this.monitorIndex === undefined || this.monitorIndex < 0 ||
+            this.monitorIndex >= Main.layoutManager.monitors.length) {
+            return null;
+        }
         return Main.layoutManager.monitors[this.monitorIndex];
     }
 
@@ -146,12 +226,19 @@ export class Zone {
         }
     }
 
+    // Fix 5: Add window validity check in idle callback
     _twoStepMoveResize(window, x, y, w, h) {
         // Some clients ignore a single move+resize request (especially with increments).
         // Do a two-step: move first, then resize on idle, then a final move_resize as a fallback.
+        if (!window || !window.get_compositor_private()) return;
         window.move_frame(true, x, y);
-        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            window.move_resize_frame(true, x, y, w, h);
+        this._safeIdleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            try {
+                if (!window || !window.get_compositor_private()) return GLib.SOURCE_REMOVE;
+                window.move_resize_frame(true, x, y, w, h);
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in _twoStepMoveResize');
+            }
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -163,7 +250,7 @@ export class Zone {
      *  - Detect well-known terminal classes.
      *  - Apply typical increment values observed via `xprop` (width 10px, height 19px)
      *    with base sizes (68x101). These may vary slightly with theme/fonts, but
-     *    will usually be accepted by the client, ensuring snaps “stick”.
+     *    will usually be accepted by the client, ensuring snaps "stick".
      *
      * If the window doesn't match, we return the requested size unchanged.
      */
@@ -199,101 +286,130 @@ export class Zone {
         }
     }
 
+    // Fix 9: Wrap snapWindow in try-catch
     snapWindow(window) {
-        // If this is a parent zone, delegate snap to the first child.
-        if (this.childZones.length > 0) {
-            this.childZones[0].snapWindow(window);
-            return;
-        }        
-        // GUARD: Never attempt to snap a window that is already maximized or fullscreen.
-        // This prevents a race condition where the maximize signal is caught, but another
-        // process tries to re-snap the window before its state is fully settled.
-		if ((window.get_maximized && window.get_maximized()) || (window.is_fullscreen && window.is_fullscreen())) {
-	        return;
-	    }
-        // If the window is already in another zone (including a sibling), unsnap it first.
-        // This is a more robust way to handle moves between zones.
-        if (window._tilingZone && window._tilingZone !== this) {
-            window._tilingZone.unsnapWindow(window);
-        }
-
-        if (!this._snappedWindows.has(window)) {
-            this._snappedWindows.add(window);
-            window._tilingZoneId = this.name; // Tag the window
-            window._tilingZone = this; // Direct reference for easier moves
-            this._tabBar.addTab(window);
-        }        
-        if (!this.rect) return;
-
-        // Ensure not maximized/tiled before attempting to move.
-        this._ensureUntiled(window);
-
-        const tabBarHeight = this._tabBar.height;
-        const { top, right, bottom, left } = this._getGaps();
-        const newX = this.rect.x + left;
-        const newY = this.rect.y + top + tabBarHeight; // window below tab bar
-        let newWidth = this.rect.width - (left + right);
-        let newHeight = this.rect.height - (top + bottom) - tabBarHeight;
-
-        // Respect client resize increments when applicable (e.g., terminals).
-        // This prevents Mutter from ignoring our move/resize when sizes are invalid.
-        const [adjW, adjH] = this._quantizeToSizeHints(window, newWidth, newHeight);
-        newWidth = adjW;
-        newHeight = adjH;
-
-        // Perform a two-step move+resize to coax stubborn clients (e.g., GNOME Terminal).
-        this._twoStepMoveResize(window, newX, newY, newWidth, newHeight);
-        // Final belt-and-suspenders attempt with user_op=false in case the WM treats it differently.
-        // (Keeps behavior you added later in the file.)        
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+        try {
+            // If this is a parent zone, delegate snap to the first child.
+            if (this.childZones.length > 0) {
+                this.childZones[0].snapWindow(window);
+                return;
+            }        
+            // GUARD: Never attempt to snap a window that is already maximized or fullscreen.
+            // This prevents a race condition where the maximize signal is caught, but another
+            // process tries to re-snap the window before its state is fully settled.
+            if ((window.get_maximized && window.get_maximized()) || (window.is_fullscreen && window.is_fullscreen())) {
+                return;
+            }
+            // If the window is already in another zone (including a sibling), unsnap it first.
+            // This is a more robust way to handle moves between zones.
             try {
-                window.move_resize_frame(false, newX, newY, newWidth, newHeight);
-            } catch (_) {}
-            return GLib.SOURCE_REMOVE;
-        });
+                if (window._tilingZone && window._tilingZone !== this) {
+                    window._tilingZone.unsnapWindow(window);
+                }
+            } catch (e) {
+                // Old zone was destroyed, clear stale reference
+                window._tilingZone = null;
+                logError(e, 'TabbedTiling: Error unsnapping from previous zone');
+            }
 
-        this.activateWindow(window);
-        this._updateVisibility();
+            if (!this._snappedWindows.has(window)) {
+                this._snappedWindows.add(window);
+                window._tilingZoneId = this.name; // Tag the window
+                window._tilingZone = this; // Direct reference for easier moves
+                this._tabBar.addTab(window);
+            }        
+            if (!this.rect) return;
+
+            // Ensure not maximized/tiled before attempting to move.
+            this._ensureUntiled(window);
+
+            const tabBarHeight = this._tabBar.height;
+            const { top, right, bottom, left } = this._getGaps();
+            const newX = this.rect.x + left;
+            const newY = this.rect.y + top + tabBarHeight; // window below tab bar
+            let newWidth = this.rect.width - (left + right);
+            let newHeight = this.rect.height - (top + bottom) - tabBarHeight;
+
+            // Respect client resize increments when applicable (e.g., terminals).
+            // This prevents Mutter from ignoring our move/resize when sizes are invalid.
+            const [adjW, adjH] = this._quantizeToSizeHints(window, newWidth, newHeight);
+            newWidth = adjW;
+            newHeight = adjH;
+
+            // Perform a two-step move+resize to coax stubborn clients (e.g., GNOME Terminal).
+            this._twoStepMoveResize(window, newX, newY, newWidth, newHeight);
+            // Final belt-and-suspenders attempt with user_op=false in case the WM treats it differently.
+            this._safeTimeoutAdd(GLib.PRIORITY_DEFAULT, 50, () => {
+                try {
+                    if (!window || !window.get_compositor_private()) return GLib.SOURCE_REMOVE;
+                    window.move_resize_frame(false, newX, newY, newWidth, newHeight);
+                } catch (_) {}
+                return GLib.SOURCE_REMOVE;
+            });
+
+            this.activateWindow(window);
+            this._updateVisibility();
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in Zone.snapWindow');
+        }
     }
 
+    // Fix 9: Wrap unsnapWindow in try-catch
     unsnapWindow(window) {
-        const wasActive = (this._activeWindow === window);
-        if (this._snappedWindows.has(window)) {
-            this._snappedWindows.delete(window);
-            delete window._tilingZoneId;
-            delete window._tilingZone;
-            this._tabBar.removeTab(window);
-
-            // Remove from MRU history (and prune any stale refs while we're here)
-            this._history = this._history.filter(w => w && w !== window && this._snappedWindows.has(w));
-
-            // If the removed one was active, try to restore the most recent valid one
-            if (wasActive) {
-                // Find the next window to activate, prioritizing MRU history.
-                let nextToActivate = this._history.find(w => this._snappedWindows.has(w));
-                if (!nextToActivate && this._snappedWindows.size > 0) {
-                    // Final fallback: first remaining window in the zone.
-                    nextToActivate = this._snappedWindows.values().next().value;
+        try {
+            if (!window || !window.get_compositor_private()) {
+                // Window already destroyed — just clean up bookkeeping
+                if (window && this._snappedWindows.has(window)) {
+                    this._snappedWindows.delete(window);
+                    delete window._tilingZoneId;
+                    delete window._tilingZone;
+                    this._tabBar.removeTab(window);
+                    this._history = this._history.filter(w => w && w !== window && this._snappedWindows.has(w));
+                    if (this._activeWindow === window) this._activeWindow = null;
                 }
+                this._updateVisibility();
+                return;
+            }
+            const wasActive = (this._activeWindow === window);
+            if (this._snappedWindows.has(window)) {
+                this._snappedWindows.delete(window);
+                delete window._tilingZoneId;
+                delete window._tilingZone;
+                this._tabBar.removeTab(window);
 
-                if (nextToActivate) {
-                    // DEFER activation until the window manager is idle. This is the key fix
-                    // to prevent a race condition when a window is closed and focus shifts
-                    // simultaneously, which can crash mutter.
-                    GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-                        // Re-verify the window is still valid before activating.
-                        if (this._snappedWindows.has(nextToActivate)) {
-                            this.activateWindow(nextToActivate);
-                        }
-                        return GLib.SOURCE_REMOVE;
-                    });
-                } else {
-                    // The zone is now empty.
-                    this._activeWindow = null;
+                // Remove from MRU history (and prune any stale refs while we're here)
+                this._history = this._history.filter(w => w && w !== window && this._snappedWindows.has(w));
+
+                // If the removed one was active, try to restore the most recent valid one
+                if (wasActive) {
+                    // Find the next window to activate, prioritizing MRU history.
+                    let nextToActivate = this._history.find(w => this._snappedWindows.has(w));
+                    if (!nextToActivate && this._snappedWindows.size > 0) {
+                        // Final fallback: first remaining window in the zone.
+                        nextToActivate = this._snappedWindows.values().next().value;
+                    }
+
+                    if (nextToActivate) {
+                        // DEFER activation until the window manager is idle. This is the key fix
+                        // to prevent a race condition when a window is closed and focus shifts
+                        // simultaneously, which can crash mutter.
+                        this._safeIdleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                            // Re-verify the window is still valid before activating.
+                            if (this._snappedWindows.has(nextToActivate)) {
+                                this.activateWindow(nextToActivate);
+                            }
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    } else {
+                        // The zone is now empty.
+                        this._activeWindow = null;
+                    }
                 }
             }
+            this._updateVisibility();
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in Zone.unsnapWindow');
         }
-        this._updateVisibility();
     }
 
 	/**
@@ -308,80 +424,62 @@ export class Zone {
         }
     }
 
+    // Fix 6: Only one definition of cycleTabNext (the more encapsulated version)
     cycleTabNext() {
-        if (!this._activeWindow) return;
+        try {
+            const tabs = this.getTabs();
+            if (tabs.length < 2) return;
 
-        const tabs = this._tabBar.getTabs();
-        if (tabs.length < 2) return;
-
-        const currentIndex = tabs.findIndex(tab => tab.window === this._activeWindow);
-
-        // If found and not the last tab, move to the next one
-        if (currentIndex > -1 && currentIndex < tabs.length - 1) {
-            const nextTab = tabs[currentIndex + 1];
-            if (nextTab && nextTab.window) {
-                this.activateWindow(nextTab.window);
+            const currentIndex = tabs.findIndex(t => t.window === this._activeWindow);
+            if (currentIndex !== -1 && currentIndex < tabs.length - 1) {
+                const nextTab = tabs[currentIndex + 1];
+                if (nextTab && nextTab.window) {
+                    this.activateWindow(nextTab.window);
+                }
             }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in Zone.cycleTabNext');
         }
     }
 
+    // Fix 6: Only one definition of cycleTabPrevious (the more encapsulated version)
     cycleTabPrevious() {
-        if (!this._activeWindow) return;
+        try {
+            const tabs = this.getTabs();
+            if (tabs.length < 2) return;
 
-        const tabs = this._tabBar.getTabs();
-        if (tabs.length < 2) return;
-
-        const currentIndex = tabs.findIndex(tab => tab.window === this._activeWindow);
-
-        // If found and not the first tab, move to the previous one
-        if (currentIndex > 0) {
-            const prevTab = tabs[currentIndex - 1];
-            if (prevTab && prevTab.window) {
-                this.activateWindow(prevTab.window);
+            const currentIndex = tabs.findIndex(t => t.window === this._activeWindow);
+            if (currentIndex > 0) {
+                const prevTab = tabs[currentIndex - 1];
+                if (prevTab && prevTab.window) {
+                    this.activateWindow(prevTab.window);
+                }
             }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in Zone.cycleTabPrevious');
         }
     }
 
+    // Fix 10: Add null check and try-catch to activateWindow
     activateWindow(window) {
-        if (this._snappedWindows.has(window)) {
-            window.activate(global.get_current_time());
-            this._tabBar.setActiveTab(window);
-            // Immediately update the yellow "globally focused" highlight for this tab.
-            // This ensures the tab turns yellow even before the compositor reports focus.
-            if (this._tabBar && this._tabBar.reflectGlobalFocus)
-                this._tabBar.reflectGlobalFocus(window);            
-            // Record MRU (most recent first), dedupe, cap to 5
-            this._activeWindow = window;
-            this._history = this._history.filter(w => w && w !== window && this._snappedWindows.has(w));
-            this._history.unshift(window);
-            if (this._history.length > 5)
-                this._history.length = 5;            
-        }
-    }
-
-    cycleTabNext() {
-        const tabs = this.getTabs();
-        if (tabs.length < 2) return;
-
-        const currentIndex = tabs.findIndex(t => t.window === this._activeWindow);
-        if (currentIndex !== -1 && currentIndex < tabs.length - 1) {
-            const nextTab = tabs[currentIndex + 1];
-            if (nextTab && nextTab.window) {
-                this.activateWindow(nextTab.window);
+        if (!this._tabBar || !window) return;
+        try {
+            if (this._snappedWindows.has(window)) {
+                window.activate(global.get_current_time());
+                this._tabBar.setActiveTab(window);
+                // Immediately update the yellow "globally focused" highlight for this tab.
+                // This ensures the tab turns yellow even before the compositor reports focus.
+                if (this._tabBar && this._tabBar.reflectGlobalFocus)
+                    this._tabBar.reflectGlobalFocus(window);            
+                // Record MRU (most recent first), dedupe, cap to 5
+                this._activeWindow = window;
+                this._history = this._history.filter(w => w && w !== window && this._snappedWindows.has(w));
+                this._history.unshift(window);
+                if (this._history.length > 5)
+                    this._history.length = 5;            
             }
-        }
-    }
-
-    cycleTabPrevious() {
-        const tabs = this.getTabs();
-        if (tabs.length < 2) return;
-
-        const currentIndex = tabs.findIndex(t => t.window === this._activeWindow);
-        if (currentIndex > 0) {
-            const prevTab = tabs[currentIndex - 1];
-            if (prevTab && prevTab.window) {
-                this.activateWindow(prevTab.window);
-            }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in Zone.activateWindow');
         }
     }
 
@@ -462,6 +560,7 @@ export class Zone {
         return this.containsWindow(window) ? this : null;
     }
 
+    // Fix 2: split() uses SAFE_ZONE_PROPS instead of { ...this }
     split(direction) {
         // Can only split a leaf zone that isn't already part of a split
         if (this.childZones.length > 0 || !['horizontal', 'vertical'].includes(direction)) {
@@ -472,8 +571,20 @@ export class Zone {
         const windowsToMove = [...this.getSnappedWindows()];
         windowsToMove.forEach(w => this.unsnapWindow(w)); // Unsnap but keep track
 
-        const childData1 = { ...this }; // Copy properties
-        const childData2 = { ...this };
+        // Fix 2: Only copy config properties, not internal state
+        const childData1 = {};
+        const childData2 = {};
+        for (const key of SAFE_ZONE_PROPS) {
+            if (key in this) {
+                childData1[key] = this[key];
+                childData2[key] = this[key];
+            }
+        }
+        // Clear childZones on the child data (they are new leaf zones)
+        childData1.childZones = [];
+        childData2.childZones = [];
+        childData1.splitDirection = 'none';
+        childData2.splitDirection = 'none';
 
         if (direction === 'horizontal') {
             const newHeight = Math.floor(this.height / 2);
@@ -511,8 +622,16 @@ export class Zone {
         this.childZones = [];
         this.splitDirection = 'none';
 
-        // Re-snap all collected windows to this now-merged zone
-        windowsToMove.forEach(w => this.snapWindow(w));
+        // Re-snap all collected windows to this now-merged zone, validating each
+        windowsToMove.forEach(w => {
+            try {
+                if (w && w.get_compositor_private()) {
+                    this.snapWindow(w);
+                }
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error re-snapping window during merge');
+            }
+        });
 
         this._updateVisibility();
         this._updateActionButtons();
@@ -527,15 +646,38 @@ export class Zone {
     }
 
     destroy() {
+        // Fix 8: Mark as destroyed immediately
+        this._isDestroyed = true;
+
         // Recursively destroy children first
         if (this.childZones.length > 0) {
             [...this.childZones].forEach(child => child.destroy());
             this.childZones = [];
-        }        
-        // Unsnap all windows before destroying
+        }
+        // Unsnap all windows BEFORE clearing source IDs so any new sources
+        // created by unsnapWindow are tracked and cleaned up below.
         [...this._snappedWindows].forEach(win => this.unsnapWindow(win));
+
+        // Fix 3: Cancel all pending timer/idle sources (including any added by unsnap)
+        this._pendingSourceIds.forEach(id => {
+            try { GLib.source_remove(id); } catch (e) { /* already removed */ }
+        });
+        this._pendingSourceIds.clear();
+
         if (this._tabBar) {
-            this._tabBar.destroy();
+            try {
+                if (this._isTabBarInChrome) {
+                    Main.layoutManager.removeChrome(this._tabBar);
+                } else {
+                    const parent = this._tabBar.get_parent?.();
+                    if (parent) parent.remove_child(this._tabBar);
+                }
+            } catch (e) {
+                // Best-effort removal from parent
+            }
+            try {
+                this._tabBar.destroy();
+            } catch (e) { }
             this._tabBar = null;
         }
     }

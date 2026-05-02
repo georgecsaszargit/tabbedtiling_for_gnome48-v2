@@ -24,21 +24,21 @@ export const ProfileManager = GObject.registerClass({
     }
 
     _ensureDirExists() {
-        if (!this._configDir.query_exists(null)) {
-            log('Config directory not found, creating it.');
-            try {
+        try {
+            if (!this._configDir.query_exists(null)) {
+                log('Config directory not found, creating it.');
                 this._configDir.make_directory_with_parents(null);
-            } catch (e) {
-                log(`Error creating config directory: ${e}`);
             }
+        } catch (e) {
+            log(`Error creating config directory: ${e}`);
         }
-        if (!this._profilesDir.query_exists(null)) {
-            log('Profiles directory not found, creating it.');
-            try {
+        try {
+            if (!this._profilesDir.query_exists(null)) {
+                log('Profiles directory not found, creating it.');
                 this._profilesDir.make_directory_with_parents(null);
-            } catch (e) {
-                log(`Error creating profiles directory: ${e}`);
             }
+        } catch (e) {
+            log(`Error creating profiles directory: ${e}`);
         }
     }
 
@@ -58,21 +58,29 @@ export const ProfileManager = GObject.registerClass({
     }
 
     _loadProfilesFile() {
-        if (!this._profilesFile.query_exists(null)) {
-            log('Profiles file not found, creating default.');
-            const defaultData = this._getDefaultProfilesData();
-            this._saveProfilesFile(defaultData);
-            // Create default profile directory with empty zones
-            this._createProfileDir('Default');
-            return defaultData;
-        }
         try {
-            const [ok, contents] = this._profilesFile.load_contents(null);
-            if (ok) {
-                return JSON.parse(new TextDecoder().decode(contents));
+            if (!this._profilesFile.query_exists(null)) {
+                log('Profiles file not found, creating default.');
+                const defaultData = this._getDefaultProfilesData();
+                this._saveProfilesFile(defaultData);
+                // Create default profile directory with empty zones
+                this._createProfileDir('Default');
+                return defaultData;
+            }
+            try {
+                const [ok, contents] = this._profilesFile.load_contents(null);
+                if (ok) {
+                    const data = JSON.parse(new TextDecoder().decode(contents));
+                    // Null-safety: ensure expected properties exist
+                    data.profiles = data.profiles ?? [];
+                    data.activeProfile = data.activeProfile ?? 'Default';
+                    return data;
+                }
+            } catch (e) {
+                log(`Error loading profiles file: ${e}`);
             }
         } catch (e) {
-            log(`Error loading profiles file: ${e}`);
+            log(`Error in _loadProfilesFile: ${e}`);
         }
         return this._getDefaultProfilesData();
     }
@@ -80,8 +88,9 @@ export const ProfileManager = GObject.registerClass({
     _saveProfilesFile(data) {
         try {
             const json = JSON.stringify(data, null, 2);
+            const bytes = new TextEncoder().encode(json);
             this._profilesFile.replace_contents(
-                json,
+                bytes,
                 null,
                 false,
                 Gio.FileCreateFlags.REPLACE_DESTINATION,
@@ -95,23 +104,24 @@ export const ProfileManager = GObject.registerClass({
 
     _createProfileDir(name) {
         const profileDir = this._profilesDir.get_child(this._sanitizeName(name));
-        if (!profileDir.query_exists(null)) {
-            try {
+        try {
+            if (!profileDir.query_exists(null)) {
                 profileDir.make_directory_with_parents(null);
                 const zonesFile = profileDir.get_child('zones.json');
                 const defaultZones = this._getDefaultZonesConfig();
                 const json = JSON.stringify(defaultZones, null, 2);
+                const bytes = new TextEncoder().encode(json);
                 zonesFile.replace_contents(
-                    json,
+                    bytes,
                     null,
                     false,
                     Gio.FileCreateFlags.REPLACE_DESTINATION,
                     null
                 );
                 log(`Created profile directory: ${name}`);
-            } catch (e) {
-                log(`Error creating profile directory: ${e}`);
             }
+        } catch (e) {
+            log(`Error creating profile directory: ${e}`);
         }
         return profileDir;
     }
@@ -126,226 +136,281 @@ export const ProfileManager = GObject.registerClass({
     }
 
     load() {
-        this._profiles = this._loadProfilesFile();
-        this._activeProfile = this._profiles.activeProfile || 'Default';
+        try {
+            this._profiles = this._loadProfilesFile();
+            this._activeProfile = this._profiles.activeProfile ?? 'Default';
+        } catch (e) {
+            log(`Error in load(): ${e}`);
+            this._profiles = this._getDefaultProfilesData();
+            this._activeProfile = 'Default';
+        }
         return this;
     }
 
     getProfiles() {
-        if (!this._profiles) {
-            this.load();
+        try {
+            if (!this._profiles) {
+                this.load();
+            }
+            return this._profiles.profiles ?? [];
+        } catch (e) {
+            log(`Error in getProfiles(): ${e}`);
+            return [];
         }
-        return this._profiles.profiles || [];
     }
 
     getActiveProfile() {
-        if (!this._profiles) {
-            this.load();
+        try {
+            if (!this._profiles) {
+                this.load();
+            }
+            return this._activeProfile ?? 'Default';
+        } catch (e) {
+            log(`Error in getActiveProfile(): ${e}`);
+            return 'Default';
         }
-        return this._activeProfile;
     }
 
     setActiveProfile(name) {
-        if (!this._profiles) {
-            this.load();
-        }
-        // Verify profile exists
-        const profile = this._profiles.profiles.find(p => p.name === name);
-        if (!profile) {
-            log(`Cannot set active profile: ${name} not found`);
+        try {
+            if (!this._profiles) {
+                this.load();
+            }
+            // Verify profile exists
+            const profiles = this._profiles.profiles ?? [];
+            const profile = profiles.find(p => p.name === name);
+            if (!profile) {
+                log(`Cannot set active profile: ${name} not found`);
+                return false;
+            }
+            this._activeProfile = name;
+            this._profiles.activeProfile = name;
+            this._saveProfilesFile(this._profiles);
+            this.emit('profile-changed', name);
+            log(`Active profile set to: ${name}`);
+            return true;
+        } catch (e) {
+            log(`Error in setActiveProfile(): ${e}`);
             return false;
         }
-        this._activeProfile = name;
-        this._profiles.activeProfile = name;
-        this._saveProfilesFile(this._profiles);
-        this.emit('profile-changed', name);
-        log(`Active profile set to: ${name}`);
-        return true;
     }
 
     createProfile(name) {
-        if (!this._profiles) {
-            this.load();
-        }
-        // Check if name already exists
-        if (this._profiles.profiles.find(p => p.name === name)) {
-            log(`Profile already exists: ${name}`);
+        try {
+            if (!this._profiles) {
+                this.load();
+            }
+            const profiles = this._profiles.profiles ?? [];
+            // Check if name already exists
+            if (profiles.find(p => p.name === name)) {
+                log(`Profile already exists: ${name}`);
+                return false;
+            }
+            const newProfile = {
+                name: name,
+                createdAt: new Date().toISOString()
+            };
+            this._profiles.profiles.push(newProfile);
+            this._createProfileDir(name);
+            this._saveProfilesFile(this._profiles);
+            log(`Created profile: ${name}`);
+            return true;
+        } catch (e) {
+            log(`Error in createProfile(): ${e}`);
             return false;
         }
-        const newProfile = {
-            name: name,
-            createdAt: new Date().toISOString()
-        };
-        this._profiles.profiles.push(newProfile);
-        this._createProfileDir(name);
-        this._saveProfilesFile(this._profiles);
-        log(`Created profile: ${name}`);
-        return true;
     }
 
     deleteProfile(name) {
-        if (!this._profiles) {
-            this.load();
-        }
-        // Cannot delete the last profile
-        if (this._profiles.profiles.length <= 1) {
-            log('Cannot delete the last profile');
+        try {
+            if (!this._profiles) {
+                this.load();
+            }
+            const profiles = this._profiles.profiles ?? [];
+            // Cannot delete the last profile
+            if (profiles.length <= 1) {
+                log('Cannot delete the last profile');
+                return false;
+            }
+            const index = profiles.findIndex(p => p.name === name);
+            if (index === -1) {
+                log(`Profile not found: ${name}`);
+                return false;
+            }
+            this._profiles.profiles.splice(index, 1);
+            
+            // If deleting active profile, switch to first remaining
+            if (this._activeProfile === name) {
+                this._activeProfile = this._profiles.profiles[0].name;
+                this._profiles.activeProfile = this._activeProfile;
+            }
+            
+            this._saveProfilesFile(this._profiles);
+            
+            // Delete the profile directory
+            try {
+                const profileDir = this._getProfileDir(name);
+                if (profileDir.query_exists(null)) {
+                    this._deleteDirRecursive(profileDir);
+                }
+            } catch (e) {
+                log(`Error deleting profile directory for ${name}: ${e}`);
+            }
+            
+            log(`Deleted profile: ${name}`);
+            return true;
+        } catch (e) {
+            log(`Error in deleteProfile(): ${e}`);
             return false;
         }
-        const index = this._profiles.profiles.findIndex(p => p.name === name);
-        if (index === -1) {
-            log(`Profile not found: ${name}`);
-            return false;
-        }
-        this._profiles.profiles.splice(index, 1);
-        
-        // If deleting active profile, switch to first remaining
-        if (this._activeProfile === name) {
-            this._activeProfile = this._profiles.profiles[0].name;
-            this._profiles.activeProfile = this._activeProfile;
-        }
-        
-        this._saveProfilesFile(this._profiles);
-        
-        // Delete the profile directory
-        const profileDir = this._getProfileDir(name);
-        if (profileDir.query_exists(null)) {
-            this._deleteDirRecursive(profileDir);
-        }
-        
-        log(`Deleted profile: ${name}`);
-        return true;
     }
 
     renameProfile(oldName, newName) {
-        if (!this._profiles) {
-            this.load();
-        }
-        // Check if old profile exists
-        const profile = this._profiles.profiles.find(p => p.name === oldName);
-        if (!profile) {
-            log(`Profile not found: ${oldName}`);
-            return false;
-        }
-        // Check if new name already exists
-        if (this._profiles.profiles.find(p => p.name === newName)) {
-            log(`Profile name already exists: ${newName}`);
-            return false;
-        }
-        
-        const oldDir = this._getProfileDir(oldName);
-        const newDir = this._getProfileDir(newName);
-        
-        // Rename directory
-        if (oldDir.query_exists(null)) {
-            try {
-                oldDir.set_display_name(this._sanitizeName(newName));
-            } catch (e) {
-                log(`Error renaming profile directory: ${e}`);
+        try {
+            if (!this._profiles) {
+                this.load();
+            }
+            const profiles = this._profiles.profiles ?? [];
+            // Check if old profile exists
+            const profile = profiles.find(p => p.name === oldName);
+            if (!profile) {
+                log(`Profile not found: ${oldName}`);
                 return false;
             }
+            // Check if new name already exists
+            if (profiles.find(p => p.name === newName)) {
+                log(`Profile name already exists: ${newName}`);
+                return false;
+            }
+            
+            const oldDir = this._getProfileDir(oldName);
+            
+            // Rename directory
+            if (oldDir.query_exists(null)) {
+                try {
+                    oldDir.set_display_name(this._sanitizeName(newName));
+                } catch (e) {
+                    log(`Error renaming profile directory: ${e}`);
+                    return false;
+                }
+            }
+            
+            // Update profiles list
+            profile.name = newName;
+            
+            // Update active profile if needed
+            if (this._activeProfile === oldName) {
+                this._activeProfile = newName;
+                this._profiles.activeProfile = newName;
+            }
+            
+            this._saveProfilesFile(this._profiles);
+            log(`Renamed profile: ${oldName} -> ${newName}`);
+            return true;
+        } catch (e) {
+            log(`Error in renameProfile(): ${e}`);
+            return false;
         }
-        
-        // Update profiles list
-        profile.name = newName;
-        
-        // Update active profile if needed
-        if (this._activeProfile === oldName) {
-            this._activeProfile = newName;
-            this._profiles.activeProfile = newName;
-        }
-        
-        this._saveProfilesFile(this._profiles);
-        log(`Renamed profile: ${oldName} -> ${newName}`);
-        return true;
     }
 
     duplicateProfile(sourceName, newName) {
-        if (!this._profiles) {
-            this.load();
-        }
-        // Check if source exists
-        const source = this._profiles.profiles.find(p => p.name === sourceName);
-        if (!source) {
-            log(`Source profile not found: ${sourceName}`);
-            return false;
-        }
-        // Check if new name already exists
-        if (this._profiles.profiles.find(p => p.name === newName)) {
-            log(`Profile name already exists: ${newName}`);
-            return false;
-        }
-        
-        // Create new profile entry
-        const newProfile = {
-            name: newName,
-            createdAt: new Date().toISOString()
-        };
-        this._profiles.profiles.push(newProfile);
-        
-        // Create directory and copy zones
-        const sourceDir = this._getProfileDir(sourceName);
-        const newDir = this._createProfileDir(newName);
-        
-        if (sourceDir.query_exists(null)) {
-            const sourceZonesFile = sourceDir.get_child('zones.json');
-            if (sourceZonesFile.query_exists(null)) {
-                try {
-                    const [ok, contents] = sourceZonesFile.load_contents(null);
-                    if (ok) {
-                        const newZonesFile = newDir.get_child('zones.json');
-                        newZonesFile.replace_contents(
-                            contents,
-                            null,
-                            false,
-                            Gio.FileCreateFlags.REPLACE_DESTINATION,
-                            null
-                        );
-                    }
-                } catch (e) {
-                    log(`Error copying zones file: ${e}`);
-                }
+        try {
+            if (!this._profiles) {
+                this.load();
             }
+            const profiles = this._profiles.profiles ?? [];
+            // Check if source exists
+            const source = profiles.find(p => p.name === sourceName);
+            if (!source) {
+                log(`Source profile not found: ${sourceName}`);
+                return false;
+            }
+            // Check if new name already exists
+            if (profiles.find(p => p.name === newName)) {
+                log(`Profile name already exists: ${newName}`);
+                return false;
+            }
+            
+            // Create new profile entry
+            const newProfile = {
+                name: newName,
+                createdAt: new Date().toISOString()
+            };
+            this._profiles.profiles.push(newProfile);
+            
+            // Create directory and copy zones
+            const sourceDir = this._getProfileDir(sourceName);
+            const newDir = this._createProfileDir(newName);
+            
+            try {
+                if (sourceDir.query_exists(null)) {
+                    const sourceZonesFile = sourceDir.get_child('zones.json');
+                    if (sourceZonesFile.query_exists(null)) {
+                        const [ok, contents] = sourceZonesFile.load_contents(null);
+                        if (ok) {
+                            const newZonesFile = newDir.get_child('zones.json');
+                            // contents is already a Uint8Array from load_contents
+                            newZonesFile.replace_contents(
+                                contents,
+                                null,
+                                false,
+                                Gio.FileCreateFlags.REPLACE_DESTINATION,
+                                null
+                            );
+                        }
+                    }
+                }
+            } catch (e) {
+                log(`Error copying zones file: ${e}`);
+            }
+            
+            this._saveProfilesFile(this._profiles);
+            log(`Duplicated profile: ${sourceName} -> ${newName}`);
+            return true;
+        } catch (e) {
+            log(`Error in duplicateProfile(): ${e}`);
+            return false;
         }
-        
-        this._saveProfilesFile(this._profiles);
-        log(`Duplicated profile: ${sourceName} -> ${newName}`);
-        return true;
     }
 
     loadProfileConfig(name) {
-        const profileDir = this._getProfileDir(name);
-        const zonesFile = profileDir.get_child('zones.json');
-        
-        if (!zonesFile.query_exists(null)) {
-            log(`Zones file not found for profile: ${name}`);
-            return this._getDefaultZonesConfig();
-        }
-        
         try {
-            const [ok, contents] = zonesFile.load_contents(null);
-            if (ok) {
-                return JSON.parse(new TextDecoder().decode(contents));
+            const profileDir = this._getProfileDir(name);
+            const zonesFile = profileDir.get_child('zones.json');
+            
+            if (!zonesFile.query_exists(null)) {
+                log(`Zones file not found for profile: ${name}`);
+                return this._getDefaultZonesConfig();
+            }
+            
+            try {
+                const [ok, contents] = zonesFile.load_contents(null);
+                if (ok) {
+                    return JSON.parse(new TextDecoder().decode(contents));
+                }
+            } catch (e) {
+                log(`Error loading zones for profile ${name}: ${e}`);
             }
         } catch (e) {
-            log(`Error loading zones for profile ${name}: ${e}`);
+            log(`Error in loadProfileConfig(): ${e}`);
         }
         return this._getDefaultZonesConfig();
     }
 
     saveProfileConfig(name, zonesConfig) {
-        const profileDir = this._getProfileDir(name);
-        
-        if (!profileDir.query_exists(null)) {
-            this._createProfileDir(name);
-        }
-        
-        const zonesFile = profileDir.get_child('zones.json');
-        
         try {
+            const profileDir = this._getProfileDir(name);
+            
+            if (!profileDir.query_exists(null)) {
+                this._createProfileDir(name);
+            }
+            
+            const zonesFile = profileDir.get_child('zones.json');
+            
             const json = JSON.stringify(zonesConfig, null, 2);
+            const bytes = new TextEncoder().encode(json);
             zonesFile.replace_contents(
-                json,
+                bytes,
                 null,
                 false,
                 Gio.FileCreateFlags.REPLACE_DESTINATION,
@@ -369,10 +434,14 @@ export const ProfileManager = GObject.registerClass({
             let file;
             while ((file = enumerator.next_file(null)) !== null) {
                 const child = dir.get_child(file.get_name());
-                if (child.query_file_type(null) === Gio.FileType.DIRECTORY) {
-                    this._deleteDirRecursive(child);
-                } else {
-                    child.delete(null);
+                try {
+                    if (child.query_file_type(Gio.FileQueryInfoFlags.NONE, null) === Gio.FileType.DIRECTORY) {
+                        this._deleteDirRecursive(child);
+                    } else {
+                        child.delete(null);
+                    }
+                } catch (e) {
+                    log(`Error deleting child ${file.get_name()}: ${e}`);
                 }
             }
             dir.delete(null);
@@ -382,8 +451,13 @@ export const ProfileManager = GObject.registerClass({
     }
 
     exportProfile(name) {
-        const config = this.loadProfileConfig(name);
-        return JSON.stringify(config, null, 2);
+        try {
+            const config = this.loadProfileConfig(name);
+            return JSON.stringify(config, null, 2);
+        } catch (e) {
+            log(`Error in exportProfile(): ${e}`);
+            return JSON.stringify(this._getDefaultZonesConfig(), null, 2);
+        }
     }
 
     importProfile(name, jsonString) {

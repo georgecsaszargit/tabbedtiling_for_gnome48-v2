@@ -18,13 +18,13 @@ export class ConfigManager {
     }
 
     _ensureDirExists() {
-        if (!this._configDir.query_exists(null)) {
-            log('Config directory not found, creating it.');
-            try {
+        try {
+            if (!this._configDir.query_exists(null)) {
+                log('Config directory not found, creating it.');
                 this._configDir.make_directory_with_parents(null);
-            } catch (e) {
-                log(`Error creating config directory: ${e}`);
             }
+        } catch (e) {
+            log(`Error in _ensureDirExists: ${e}`);
         }
     }
     
@@ -75,35 +75,55 @@ export class ConfigManager {
     }
 
     load() {
-        if (!this._configFile.query_exists(null)) {
-            log('Config file not found, creating a default one.');
-            this._config = this._getDefaultConfig();
-            this.save(this._config);
-        } else {
-            try {
-                const [ok, contents] = this._configFile.load_contents(null);
-                if (ok) {
-                    this._config = JSON.parse(new TextDecoder().decode(contents));
-                } else {
-                    throw new Error("Failed to load file contents.");
-                }
-            } catch (e) {
-                log(`Error reading or parsing config file: ${e}. Using default config.`);
+        try {
+            if (!this._configFile.query_exists(null)) {
+                log('Config file not found, creating a default one.');
                 this._config = this._getDefaultConfig();
+                this.save(this._config);
+            } else {
+                try {
+                    const [ok, contents] = this._configFile.load_contents(null);
+                    if (ok) {
+                        const parsed = JSON.parse(new TextDecoder().decode(contents));
+                        // Merge missing top-level keys from defaults
+                        const defaults = this._getDefaultConfig();
+                        for (const key of Object.keys(defaults)) {
+                            if (!(key in parsed)) {
+                                parsed[key] = defaults[key];
+                            }
+                        }
+                        this._config = parsed;
+                    } else {
+                        throw new Error("Failed to load file contents.");
+                    }
+                } catch (e) {
+                    log(`Error reading or parsing config file: ${e}. Using default config.`);
+                    this._config = this._getDefaultConfig();
+                }
             }
+        } catch (e) {
+            log(`Error in load(): ${e}. Using default config.`);
+            this._config = this._getDefaultConfig();
         }
         return this._config;
     }
 
     getConfig() {
-        return this._config || this.load();
+        try {
+            return this._config || this.load();
+        } catch (e) {
+            log(`Error in getConfig(): ${e}. Using default config.`);
+            this._config = this._getDefaultConfig();
+            return this._config;
+        }
     }
 
     save(configObject) {
         try {
             const data = JSON.stringify(configObject, null, 2);
+            const bytes = new TextEncoder().encode(data);
             this._configFile.replace_contents(
-                data,
+                bytes,
                 null,
                 false,
                 Gio.FileCreateFlags.REPLACE_DESTINATION,
@@ -119,8 +139,9 @@ export class ConfigManager {
     savePreviewZones(zones) {
         try {
             const data = JSON.stringify(zones);
+            const bytes = new TextEncoder().encode(data);
             this._previewFile.replace_contents(
-                data, null, false,
+                bytes, null, false,
                 Gio.FileCreateFlags.REPLACE_DESTINATION, null
             );
         } catch (e) {
@@ -130,6 +151,9 @@ export class ConfigManager {
 
     loadPreviewZones() {
         try {
+            if (!this._previewFile.query_exists(null)) {
+                return null;
+            }
             const [ok, contents] = this._previewFile.load_contents(null);
             if (ok) {
                 return JSON.parse(new TextDecoder().decode(contents));

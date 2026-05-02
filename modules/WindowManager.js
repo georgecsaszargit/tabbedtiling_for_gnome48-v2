@@ -25,6 +25,50 @@ export class WindowManager {
         // Hover polling while dragging (since MetaDisplay lacks grab-op-motion)
         this._tabBarsToggledBack = true; // Start with tab bars in the background
         this._dragHoverTimerId = 0;
+        // Fix 2: Track all pending GLib source IDs for safe cleanup
+        this._pendingSourceIds = new Set();
+        // Fix 8: Disabled guard to prevent callbacks from running after disable()
+        this._isDisabled = false;
+    }
+
+    // Fix 2: Safe wrappers for GLib.timeout_add / GLib.idle_add
+    _safeTimeoutAdd(priority, interval, callback) {
+        const id = GLib.timeout_add(priority, interval, () => {
+            try {
+                this._pendingSourceIds?.delete(id);
+                return callback();
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in timeout callback');
+                return GLib.SOURCE_REMOVE;
+            }
+        });
+        this._pendingSourceIds?.add(id);
+        return id;
+    }
+
+    _safeIdleAdd(priority, callback) {
+        const id = GLib.idle_add(priority, () => {
+            try {
+                this._pendingSourceIds?.delete(id);
+                return callback();
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in idle callback');
+                return GLib.SOURCE_REMOVE;
+            }
+        });
+        this._pendingSourceIds?.add(id);
+        return id;
+    }
+
+    // Crash-proofing: Validate that a Meta.Window is still usable
+    _isWindowValid(window) {
+        try {
+            if (!window) return false;
+            if (!window.get_compositor_private()) return false;
+            return true;
+        } catch (e) {
+            return false;
+        }
     }
 
     cycleTabNextInFocusedZone() {
@@ -70,6 +114,7 @@ export class WindowManager {
 
     enable() {
         log("DEBUG: enable() called.");
+        this._isDisabled = false;
         this.reloadConfiguration();
         this._connectSignals();
         this._updateAllZonesVisibility();
@@ -79,7 +124,20 @@ export class WindowManager {
     }
 
     disable() {
+        if (this._isDisabled) return; // Guard against double-calls
         log("DEBUG: disable() called.");
+        // Fix 8: Set disabled guard immediately
+        this._isDisabled = true;
+        // Cancel D-Bus proxy creation if still in flight
+        if (this._dbusCancellable) {
+            this._dbusCancellable.cancel();
+            this._dbusCancellable = null;
+        }
+        // Fix 2: Cancel all pending timer/idle sources before anything else
+        this._pendingSourceIds.forEach(id => {
+            try { GLib.source_remove(id); } catch (e) { /* already removed */ }
+        });
+        this._pendingSourceIds.clear();
         this._disconnectSignals();
         this._zones.forEach(zone => zone.destroy());
         this._zones = [];
@@ -154,13 +212,59 @@ export class WindowManager {
             this._signalConnections.push({ gobj, id });
         };
 
-        connect(global.display, 'grab-op-begin', this._onGrabOpBegin.bind(this));
-        connect(global.display, 'grab-op-end', this._onGrabOpEnd.bind(this));
-        connect(global.display, 'window-created', this._onWindowCreated.bind(this));
-        connect(this._windowTracker, 'tracked-windows-changed', this._onTrackedWindowsChanged.bind(this));
-        connect(Main.layoutManager, 'monitors-changed', () => this.reloadConfiguration());
+        // Fix 7: Wrap grab-op-begin handler in try-catch
+        connect(global.display, 'grab-op-begin', (display, window, op) => {
+            try {
+                if (this._isDisabled) return; // Fix 8
+                this._onGrabOpBegin(display, window, op);
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in grab-op-begin handler');
+            }
+        });
+        // Fix 7: Wrap grab-op-end handler in try-catch
+        connect(global.display, 'grab-op-end', (display, window) => {
+            try {
+                if (this._isDisabled) return; // Fix 8
+                this._onGrabOpEnd(display, window);
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in grab-op-end handler');
+            }
+        });
+        // Fix 7: Wrap window-created handler in try-catch
+        connect(global.display, 'window-created', (display, window) => {
+            try {
+                if (this._isDisabled) return; // Fix 8
+                this._onWindowCreated(display, window);
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in window-created handler');
+            }
+        });
+        // Fix 7: Wrap tracked-windows-changed handler in try-catch
+        connect(this._windowTracker, 'tracked-windows-changed', () => {
+            try {
+                if (this._isDisabled) return; // Fix 8
+                this._onTrackedWindowsChanged();
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in tracked-windows-changed handler');
+            }
+        });
+        connect(Main.layoutManager, 'monitors-changed', () => {
+            try {
+                if (this._isDisabled) return;
+                this.reloadConfiguration();
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in monitors-changed handler');
+            }
+        });
         // Keep tab highlights in sync with true keyboard focus
-        connect(global.display, 'notify::focus-window', this._onFocusChanged.bind(this));
+        connect(global.display, 'notify::focus-window', () => {
+            try {
+                if (this._isDisabled) return;
+                this._onFocusChanged();
+            } catch (e) {
+                logError(e, 'TabbedTiling: Error in focus-changed handler');
+            }
+        });
 
         // Manually create a proxy for LoginManager to handle suspend/resume.
         const LoginManagerIface = `
@@ -177,6 +281,9 @@ export class WindowManager {
             const info = Gio.DBusNodeInfo.new_for_xml(LoginManagerIface);
             const interfaceInfo = info.interfaces.find(i => i.name === 'org.freedesktop.login1.Manager');
 
+            // Create a cancellable so we can abort the async proxy if disable() is called
+            this._dbusCancellable = new Gio.Cancellable();
+
             Gio.DBusProxy.new_for_bus(
                 Gio.BusType.SYSTEM,
                 Gio.DBusProxyFlags.NONE,
@@ -184,26 +291,40 @@ export class WindowManager {
                 'org.freedesktop.login1',      // name
                 '/org/freedesktop/login1',      // object path
                 'org.freedesktop.login1.Manager', // interface name
-                null, // cancellable
+                this._dbusCancellable, // cancellable
                 (source_object, res) => {
                     try {
                         const proxy = Gio.DBusProxy.new_for_bus_finish(res);
                         log("DEBUG: LoginManager proxy created successfully.");
                         this._loginProxy = proxy;
 
+                        // Fix 3: Check if extension was disabled during async proxy creation
+                        if (this._isDisabled) return;
+
+                        // Fix 7: Wrap PrepareForSleep D-Bus signal handler in try-catch
                         connect(this._loginProxy, 'g-signal', (p, sender, signal, params) => {
-                             if (signal === 'PrepareForSleep') {
-                                const starting = params.get_child_value(0).get_boolean();
-                                if (!starting) {
-                                    log("DEBUG: System resumed from sleep, re-snapping windows.");
-                                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-                                        this._snapExistingWindows();
-                                        return GLib.SOURCE_REMOVE;
-                                    });
+                            try {
+                                if (this._isDisabled) return; // Fix 8
+                                if (signal === 'PrepareForSleep') {
+                                    const starting = params.get_child_value(0).get_boolean();
+                                    if (!starting) {
+                                        log("DEBUG: System resumed from sleep, re-snapping windows.");
+                                        this._safeTimeoutAdd(GLib.PRIORITY_DEFAULT, 1000, () => {
+                                            if (this._isDisabled) return GLib.SOURCE_REMOVE; // Fix 8
+                                            this._snapExistingWindows();
+                                            return GLib.SOURCE_REMOVE;
+                                        });
+                                    }
                                 }
-                             }
+                            } catch (e) {
+                                logError(e, 'TabbedTiling: Error in PrepareForSleep handler');
+                            }
                         });
                     } catch (e) {
+                        // If cancelled, this is expected during disable() - don't log as error
+                        if (this._isDisabled || (e.matches && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))) {
+                            return;
+                        }
                         log(`ERROR: Failed to finalize LoginManager proxy or connect signal. Error: ${e.message}`);
                     }
                 }
@@ -250,66 +371,66 @@ export class WindowManager {
             if (checkQueued) return;
             checkQueued = true;
 
-            // Use GLib.idle_add. This is the crucial part. It waits until Mutter has
+            // Use GLib.idle_add via safe wrapper. This waits until Mutter has
             // completely finished its current drawing and layout cycle before we run our code.
-            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            this._safeIdleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
                 checkQueued = false; // Allow the next allocation change to queue a new check.
 
-                // Ensure the window wasn't destroyed while we were waiting.
-                if (!window || window.get_display() === null) {
-                    return GLib.SOURCE_REMOVE;
-                }
+                try {
+                    // Fix 8: Check if disabled
+                    if (this._isDisabled) return GLib.SOURCE_REMOVE;
 
-                // Step 1: Always, always update the visibility of tab bars first.
-                this._updateAllZonesVisibility();
-
-                // Step 2: Now that the UI is correct, check if the window is back to a normal state.
-                const isMaximized = window.get_maximized() !== Meta.MaximizeFlags.NONE;
-                const isFullscreen = window.is_fullscreen();
-
-                // Step 3: If it's normal, it is now 100% safe to restore its snapped position.
-                if (!isMaximized && !isFullscreen) {
-                    const zone = this._findZoneForWindow(window);
-                    if (zone) {
-                        zone.restoreSnap(window);
+                    // Ensure the window wasn't destroyed while we were waiting.
+                    if (!this._isWindowValid(window)) {
+                        return GLib.SOURCE_REMOVE;
                     }
+
+                    // Step 1: Always, always update the visibility of tab bars first.
+                    this._updateAllZonesVisibility();
+
+                    // Step 2: Now that the UI is correct, check if the window is back to a normal state.
+                    const isMaximized = window.get_maximized() !== Meta.MaximizeFlags.NONE;
+                    const isFullscreen = window.is_fullscreen();
+
+                    // Step 3: If it's normal, it is now 100% safe to restore its snapped position.
+                    if (!isMaximized && !isFullscreen) {
+                        const zone = this._findZoneForWindow(window);
+                        if (zone) {
+                            zone.restoreSnap(window);
+                        }
+                    }
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Error in _trackWindowState idle callback');
                 }
                 
                 return GLib.SOURCE_REMOVE; // This idle task is done.
             });
         };
 
-        const ids = [
-            // The CORRECTED signal: listen to the actor's allocation, not the window's properties.
-            actor.connect('notify::allocation', onAllocationChanged),
-            // We still need to clean up when the window is closed.
-            window.connect('unmanaged', () => this._untrackWindowState(window))
+        // Fix 1: Store {obj, id} pairs so each signal is disconnected from its correct source
+        const signals = [
+            { obj: actor, id: actor.connect('notify::allocation', onAllocationChanged) },
+            { obj: window, id: window.connect('unmanaged', () => this._untrackWindowState(window)) }
         ];
-
-        this._windowStateSignals.set(window, ids);
+        this._windowStateSignals.set(window, signals);
     }
 
+    // Fix 1: Disconnect each signal from its correct source object
     _untrackWindowState(window) {
-        if (this._windowStateSignals.has(window)) {
-            this._windowStateSignals.get(window).forEach(id => {
-                try {
-                    if (window.is_remote() === false) { // Check if the window object is still valid
-                         window.disconnect(id);
-                    }
-                } catch (e) { /* ignore errors on already destroyed objects */ }
+        const signals = this._windowStateSignals.get(window);
+        if (signals) {
+            signals.forEach(sig => {
+                try { sig.obj.disconnect(sig.id); } catch (e) { /* ignore */ }
             });
             this._windowStateSignals.delete(window);
         }
     }
 
+    // Fix 1: Disconnect all tracked window state signals from correct source objects
     _disconnectWindowStateSignals() {
-        this._windowStateSignals.forEach((ids, window) => {
-            ids.forEach(id => {
-                try {
-                    if (window.is_remote() === false) {
-                        window.disconnect(id);
-                    }
-                } catch (e) { /* ignore */ }
+        this._windowStateSignals.forEach((signals, window) => {
+            signals.forEach(sig => {
+                try { sig.obj.disconnect(sig.id); } catch (e) { /* ignore */ }
             });
         });
         this._windowStateSignals.clear();
@@ -317,8 +438,9 @@ export class WindowManager {
 
     _startDragHoverTimer() {
         if (this._dragHoverTimerId) return;
-        // ~60fps polling (about 16ms). Cheap and reliable on both X11/Wayland.
-        this._dragHoverTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 16, () => {
+        // Fix 4: Use PRIORITY_DEFAULT_IDLE and 33ms to prevent main loop saturation
+        this._dragHoverTimerId = this._safeTimeoutAdd(GLib.PRIORITY_DEFAULT_IDLE, 33, () => {
+            if (this._isDisabled) return GLib.SOURCE_REMOVE; // Fix 8
             this._updateHoverHighlightFromPointer();
             return GLib.SOURCE_CONTINUE;
         });
@@ -326,7 +448,10 @@ export class WindowManager {
 
     _stopDragHoverTimer() {
         if (this._dragHoverTimerId) {
-            GLib.Source.remove(this._dragHoverTimerId);
+            try {
+                GLib.source_remove(this._dragHoverTimerId);
+            } catch (e) { /* already removed */ }
+            this._pendingSourceIds?.delete(this._dragHoverTimerId);
             this._dragHoverTimerId = 0;
         }
         this._highlighter.hideHoverHighlight();
@@ -457,6 +582,9 @@ export class WindowManager {
         if (leafZonesOnMonitor.length === 0) return null;
         const monitor = Main.layoutManager.monitors[monitorIndex];
 
+        // Fix 5: Null monitor check
+        if (!monitor) return null;
+
         for (const zone of leafZonesOnMonitor) {
             const rect = {
                 x: monitor.x + zone.x,
@@ -473,6 +601,7 @@ export class WindowManager {
     }
 
     _onGrabOpEnd(display, window) {
+        if (!window) return;
         if (window._tilingBypass) {
             delete window._tilingBypass;
             this._highlighter.hideHoverHighlight();
@@ -519,7 +648,8 @@ export class WindowManager {
     }
 
     _onWindowCreated(display, window) {
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+        this._safeTimeoutAdd(GLib.PRIORITY_DEFAULT, 200, () => {
+            if (this._isDisabled) return GLib.SOURCE_REMOVE; // Fix 8
             if (!window || !this._isSnappable(window)) return GLib.SOURCE_REMOVE;
             this._trackWindowState(window); // Track state changes (maximized, etc.)
             const monitorIndex = window.get_monitor();
@@ -528,7 +658,9 @@ export class WindowManager {
             );
 
             if (primaryZone) {
-                log(`New window "${window.get_title()}" snapping to primary zone.`);
+                // Fix 6: Safe window title access
+                const title = (() => { try { return window.get_title(); } catch(e) { return '<destroyed>'; } })();
+                log(`New window "${title}" snapping to primary zone.`);
                 primaryZone.snapWindow(window);
             }
             return GLib.SOURCE_REMOVE;
@@ -537,36 +669,57 @@ export class WindowManager {
 
     // Re-run per monitor when tracked windows list changes (e.g., window closed)
     _onTrackedWindowsChanged() {
-        const currentWindows = new Set(global.get_window_actors().map(a => a.get_meta_window()));
-        const previouslyTracked = new Set(this._windowStateSignals.keys());
+        try {
+            const currentWindows = new Set(global.get_window_actors().map(a => a.get_meta_window()));
+            const previouslyTracked = new Set(this._windowStateSignals.keys());
 
-        // Untrack closed windows and remove them from zones
-        for (const window of previouslyTracked) {
-            if (!currentWindows.has(window)) {
-                this._untrackWindowState(window);
-                const zone = this._findZoneForWindow(window);
-                if (zone) {
-                    log(`Window "${window.get_title()}" is no longer tracked, removing from zone "${zone.name}".`);
-                    zone.unsnapWindow(window);
+            // Untrack closed windows and remove them from zones
+            for (const window of previouslyTracked) {
+                if (!currentWindows.has(window)) {
+                    try {
+                        this._untrackWindowState(window);
+                    } catch (e) {
+                        logError(e, 'TabbedTiling: Error untracking window state');
+                    }
+                    try {
+                        if (this._isWindowValid(window)) {
+                            const zone = this._findZoneForWindow(window);
+                            if (zone) {
+                                // Fix 6: Safe window title access
+                                const title = (() => { try { return window.get_title(); } catch(e) { return '<destroyed>'; } })();
+                                log(`Window "${title}" is no longer tracked, removing from zone "${zone.name}".`);
+                                zone.unsnapWindow(window);
+                            }
+                        }
+                    } catch (e) {
+                        logError(e, 'TabbedTiling: Error removing window from zone');
+                    }
                 }
             }
-        }
 
-        // Track new windows
-        for (const window of currentWindows) {
-            if (!previouslyTracked.has(window)) {
-                this._trackWindowState(window);
+            // Track new windows
+            for (const window of currentWindows) {
+                if (!previouslyTracked.has(window)) {
+                    this._trackWindowState(window);
+                }
             }
+            this._updateAllZonesVisibility();
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in _onTrackedWindowsChanged');
         }
-        this._updateAllZonesVisibility();
     }
 
     _updateAllZonesVisibility() {
         const allWindows = global.get_window_actors().map(a => a.get_meta_window());
         const monitorsWithMaximizedWindows = new Set();
         allWindows.forEach(win => {
-            if ((win.get_maximized && win.get_maximized()) || (win.is_fullscreen && win.is_fullscreen())) {
-                monitorsWithMaximizedWindows.add(win.get_monitor());
+            try {
+                if (!win) return;
+                if ((win.get_maximized && win.get_maximized()) || (win.is_fullscreen && win.is_fullscreen())) {
+                    monitorsWithMaximizedWindows.add(win.get_monitor());
+                }
+            } catch (e) {
+                // Window may have been destroyed, skip it
             }
         });
         const monitors = Main.layoutManager.monitors || [];
@@ -583,17 +736,21 @@ export class WindowManager {
     _snapExistingWindows() {
         const allWindows = global.get_window_actors().map(a => a.get_meta_window());
         allWindows.forEach(window => {
-            this._trackWindowState(window);
-            if (this._isSnappable(window)) {
-                let targetZone = this._findZoneForWindow(window);
+            try {
+                this._trackWindowState(window);
+                if (this._isSnappable(window)) {
+                    let targetZone = this._findZoneForWindow(window);
 
-                if (!targetZone) {
-                    targetZone = this._findBestZoneForWindow(window);
-                }
+                    if (!targetZone) {
+                        targetZone = this._findBestZoneForWindow(window);
+                    }
 
-                if (targetZone) {
-                    targetZone.snapWindow(window);
+                    if (targetZone) {
+                        targetZone.snapWindow(window);
+                    }
                 }
+            } catch (e) {
+                // Window may have been destroyed, skip it
             }
         });
         this._updateAllZonesVisibility();
@@ -609,8 +766,9 @@ export class WindowManager {
             log(`Zone "${zone.name}" contains ${tabs.length} tabs:`);
             tabs.forEach((tab, index) => {
                 const appName = tab.app ? tab.app.get_name() : 'N/A';
-                const windowTitle = tab.window.get_title() || 'N/A';
-                const wmClass = tab.window.get_wm_class() || 'N/A';
+                // Fix 6: Safe window title access
+                const windowTitle = (() => { try { return tab.window.get_title() || 'N/A'; } catch(e) { return '<destroyed>'; } })();
+                const wmClass = (() => { try { return tab.window.get_wm_class() || 'N/A'; } catch(e) { return '<destroyed>'; } })();
                 log(`  - [${index}] App='${appName}', Title='${windowTitle}', WMClass='${wmClass}'`);
             });
         });
@@ -635,8 +793,13 @@ export class WindowManager {
 
     _findZoneForWindow(window) {
         // Check the direct reference first for performance
-        if (window._tilingZone && window._tilingZone.containsWindow(window)) {
-            return window._tilingZone;
+        try {
+            if (window._tilingZone && window._tilingZone.containsWindow(window)) {
+                return window._tilingZone;
+            }
+        } catch (e) {
+            // Zone was destroyed, clear stale reference
+            window._tilingZone = null;
         }
 
         // Fallback: search all zones recursively

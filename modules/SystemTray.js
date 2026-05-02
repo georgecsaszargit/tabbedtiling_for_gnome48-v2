@@ -32,51 +32,69 @@ class SystemTray extends PanelMenu.Button {
     }
 
     _buildMenu() {
-        this.menu.removeAll();
+        try {
+            if (!this._profileManager) return;
 
-        // ---- Enable/Disable Toggle ----
-        const isEnabled = typeof this._getEnabled === 'function' ? this._getEnabled() : true;
-        this._toggleItem = new PopupMenu.PopupSwitchMenuItem('Enable Tiling', isEnabled);
-        this._toggleItem.connect('toggled', (item, state) => {
-            if (typeof this._onToggle === 'function') {
-                this._onToggle(state);
-            }
-        });
-        this.menu.addMenuItem(this._toggleItem);
+            this.menu.removeAll();
 
-        // ---- Separator ----
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        // ---- Profile list ----
-        const profiles = this._profileManager.getProfiles();
-        const activeProfile = this._profileManager.getActiveProfile();
-
-        for (const profile of profiles) {
-            const item = new PopupMenu.PopupMenuItem(profile.name);
-
-            // Show dot ornament on the active profile
-            if (profile.name === activeProfile) {
-                item.setOrnament(PopupMenu.Ornament.DOT);
-            } else {
-                item.setOrnament(PopupMenu.Ornament.NONE);
-            }
-
-            item.connect('activate', () => {
-                this._switchProfile(profile.name);
+            // ---- Enable/Disable Toggle ----
+            const isEnabled = typeof this._getEnabled === 'function' ? this._getEnabled() : true;
+            this._toggleItem = new PopupMenu.PopupSwitchMenuItem('Enable Tiling', isEnabled);
+            this._toggleItem.connect('toggled', (item, state) => {
+                try {
+                    if (typeof this._onToggle === 'function') {
+                        this._onToggle(state);
+                    }
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Error in toggle handler');
+                }
             });
+            this.menu.addMenuItem(this._toggleItem);
 
-            this.menu.addMenuItem(item);
+            // ---- Separator ----
+            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+            // ---- Profile list ----
+            const profiles = this._profileManager.getProfiles();
+            const activeProfile = this._profileManager.getActiveProfile();
+
+            for (const profile of profiles) {
+                const item = new PopupMenu.PopupMenuItem(profile.name);
+
+                // Show dot ornament on the active profile
+                if (profile.name === activeProfile) {
+                    item.setOrnament(PopupMenu.Ornament.DOT);
+                } else {
+                    item.setOrnament(PopupMenu.Ornament.NONE);
+                }
+
+                item.connect('activate', () => {
+                    try {
+                        this._switchProfile(profile.name);
+                    } catch (e) {
+                        logError(e, 'TabbedTiling: Error in profile activate handler');
+                    }
+                });
+
+                this.menu.addMenuItem(item);
+            }
+
+            // ---- Separator ----
+            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+            // ---- Settings ----
+            const settingsItem = new PopupMenu.PopupMenuItem('Settings');
+            settingsItem.connect('activate', () => {
+                try {
+                    this._openSettings();
+                } catch (e) {
+                    logError(e, 'TabbedTiling: Error in settings activate handler');
+                }
+            });
+            this.menu.addMenuItem(settingsItem);
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in SystemTray._buildMenu');
         }
-
-        // ---- Separator ----
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        // ---- Settings ----
-        const settingsItem = new PopupMenu.PopupMenuItem('Settings');
-        settingsItem.connect('activate', () => {
-            this._openSettings();
-        });
-        this.menu.addMenuItem(settingsItem);
     }
 
     _switchProfile(name) {
@@ -121,11 +139,23 @@ class SystemTray extends PanelMenu.Button {
      * (e.g., from the prefs window).
      */
     refresh() {
-        this._profileManager.load();
-        this._buildMenu();
+        try {
+            if (!this._profileManager) return;
+            this._profileManager.load();
+            this._buildMenu();
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in SystemTray.refresh');
+        }
     }
 
     destroy() {
-        super.destroy();
+        try {
+            super.destroy();
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in SystemTray.destroy');
+        }
+        this._profileManager = null;
+        this._onProfileChanged = null;
+        this._onToggle = null;
     }
 });
