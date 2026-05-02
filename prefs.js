@@ -238,7 +238,13 @@ function saveProfileZones(profileName, zones) {
  */
 const ZoneEditorRow = GObject.registerClass(
 class ZoneEditorRow extends Adw.ExpanderRow {
-    _init(zoneData, onRemove, onChanged) {
+    /**
+     * @param {Object} zoneData - Zone configuration data
+     * @param {Function} onRemove - Callback when zone is removed
+     * @param {Function} onChanged - Callback when any zone value changes (for live edit)
+     * @param {Object} bounds - Monitor bounds { resW, resH } to constrain sliders
+     */
+    _init(zoneData, onRemove, onChanged, bounds) {
         super._init({
             title: zoneData?.name || _('Unnamed Zone'),
             subtitle: `X:${zoneData?.x ?? 0}, Y:${zoneData?.y ?? 0}, W:${zoneData?.width ?? 0}, H:${zoneData?.height ?? 0}`,
@@ -247,6 +253,7 @@ class ZoneEditorRow extends Adw.ExpanderRow {
 
         this._onRemove = onRemove;
         this._onChanged = onChanged;
+        this._bounds = bounds || { resW: 1920, resH: 1080 };
         // Normalize legacy 'gap' into per-side gaps if present
         const legacyGap = (zoneData?.gap ?? null);
         const normGaps = (zoneData?.gaps && typeof zoneData.gaps === 'object')
@@ -273,6 +280,8 @@ class ZoneEditorRow extends Adw.ExpanderRow {
             gaps: normGaps,
             isPrimary: zoneData?.isPrimary ?? false,
         };
+
+        this._updatingValue = false; // Guard against recursive value-changed triggers
 
         // Action row (right side) — Remove button
         const removeBtn = new Gtk.Button({ label: _('Remove'), valign: Gtk.Align.CENTER });
@@ -303,12 +312,37 @@ class ZoneEditorRow extends Adw.ExpanderRow {
         const labeledSpin = (label, initial, min, max, step, onChanged) => {
             const row = new Adw.ActionRow({ title: label });
             const adj = new Gtk.Adjustment({ lower: min, upper: max, step_increment: step, page_increment: step * 10, value: initial });
-            const spin = new Gtk.SpinButton({ halign: Gtk.Align.END, adjustment: adj, climb_rate: 1, digits: 0 });
-            spin.connect('value-changed', () => {
-                onChanged(spin.get_value_as_int());
+            // Slider for quick dragging
+            const scale = new Gtk.Scale({
+                adjustment: adj,
+                orientation: Gtk.Orientation.HORIZONTAL,
+                hexpand: true,
+                draw_value: false,
+                width_request: 150,
+                valign: Gtk.Align.CENTER,
+            });
+            // Spin button for precise input
+            const spin = new Gtk.SpinButton({ halign: Gtk.Align.END, adjustment: adj, climb_rate: 1, digits: 0, width_chars: 6 });
+            // Reset button — restores the saved initial value
+            const resetBtn = new Gtk.Button({
+                icon_name: 'edit-undo-symbolic',
+                valign: Gtk.Align.CENTER,
+                halign: Gtk.Align.END,
+                tooltip_text: `Reset to ${initial}`,
+            });
+            resetBtn.add_css_class('flat');
+            resetBtn.connect('clicked', () => {
+                adj.set_value(initial);
+            });
+            // Fire on adjustment value-changed (triggers during slider drag, not just on release)
+            adj.connect('value-changed', () => {
+                if (this._updatingValue) return; // prevent infinite recursion from clamping
+                onChanged(adj.get_value());
                 this._notifyChanged();
             });
+            row.add_suffix(scale);
             row.add_suffix(spin);
+            row.add_suffix(resetBtn);
             row.activatable_widget = spin;
             return [row, spin];
         };
@@ -345,14 +379,64 @@ class ZoneEditorRow extends Adw.ExpanderRow {
         });
         grid.attach(monRow, 0, 1, 1, 1);
 
-        // X, Y, Width, Height
-        const [xRow, xSpin] = labeledSpin(_('X'), this._zone.x, -10000, 10000, 1, (v) => { this._zone.x = v; this._refreshSubtitle(); });
+        // X, Y, Width, Height — with boundary clamping to monitor resolution
+        const resW = this._bounds.resW;
+        const resH = this._bounds.resH;
+
+        const [xRow, xSpin] = labeledSpin(_('X'), this._zone.x, 0, resW, 1, (v) => {
+            // Clamp: X + Width must not exceed resW
+            const maxX = Math.max(0, resW - this._zone.width);
+            const clamped = Math.min(Math.max(0, Math.round(v)), maxX);
+            this._zone.x = clamped;
+            if (clamped !== Math.round(v)) {
+                this._updatingValue = true;
+                xSpin.get_adjustment().set_value(clamped);
+                this._updatingValue = false;
+            }
+            this._refreshSubtitle();
+        });
         grid.attach(xRow, 0, 2, 1, 1);
-        const [yRow, ySpin] = labeledSpin(_('Y'), this._zone.y, -10000, 10000, 1, (v) => { this._zone.y = v; this._refreshSubtitle(); });
+
+        const [yRow, ySpin] = labeledSpin(_('Y'), this._zone.y, 0, resH, 1, (v) => {
+            // Clamp: Y + Height must not exceed resH
+            const maxY = Math.max(0, resH - this._zone.height);
+            const clamped = Math.min(Math.max(0, Math.round(v)), maxY);
+            this._zone.y = clamped;
+            if (clamped !== Math.round(v)) {
+                this._updatingValue = true;
+                ySpin.get_adjustment().set_value(clamped);
+                this._updatingValue = false;
+            }
+            this._refreshSubtitle();
+        });
         grid.attach(yRow, 0, 3, 1, 1);
-        const [wRow, wSpin] = labeledSpin(_('Width'), this._zone.width, 0, 100000, 1, (v) => { this._zone.width = v; this._refreshSubtitle(); });
+
+        const [wRow, wSpin] = labeledSpin(_('Width'), this._zone.width, 0, resW, 1, (v) => {
+            // Clamp: X + Width must not exceed resW
+            const maxW = Math.max(0, resW - this._zone.x);
+            const clamped = Math.min(Math.max(0, Math.round(v)), maxW);
+            this._zone.width = clamped;
+            if (clamped !== Math.round(v)) {
+                this._updatingValue = true;
+                wSpin.get_adjustment().set_value(clamped);
+                this._updatingValue = false;
+            }
+            this._refreshSubtitle();
+        });
         grid.attach(wRow, 0, 4, 1, 1);
-        const [hRow, hSpin] = labeledSpin(_('Height'), this._zone.height, 0, 100000, 1, (v) => { this._zone.height = v; this._refreshSubtitle(); });
+
+        const [hRow, hSpin] = labeledSpin(_('Height'), this._zone.height, 0, resH, 1, (v) => {
+            // Clamp: Y + Height must not exceed resH
+            const maxH = Math.max(0, resH - this._zone.y);
+            const clamped = Math.min(Math.max(0, Math.round(v)), maxH);
+            this._zone.height = clamped;
+            if (clamped !== Math.round(v)) {
+                this._updatingValue = true;
+                hSpin.get_adjustment().set_value(clamped);
+                this._updatingValue = false;
+            }
+            this._refreshSubtitle();
+        });
         grid.attach(hRow, 0, 5, 1, 1);
 
         // Per-side Gaps
@@ -1165,7 +1249,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
 
         // --- Live Edit: debounced preview writer ---
         let liveEditTimerId = 0;
-        const LIVE_EDIT_DEBOUNCE_MS = 300;
+        const LIVE_EDIT_DEBOUNCE_MS = 50;
 
         const writeLivePreview = () => {
             if (!liveEditSwitch.get_active()) return;
@@ -1238,6 +1322,12 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             writeLivePreview();
         };
 
+        // Helper to get current monitor bounds from generator spinners
+        const getBounds = () => ({
+            resW: resWSpin.get_value_as_int(),
+            resH: resHSpin.get_value_as_int(),
+        });
+
         // Function to load zones for a profile
         const loadZonesForProfile = (profileName) => {
             // Clear existing zone rows
@@ -1251,7 +1341,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                     zonesGroup.remove(rowSelf);
                     zoneRows = zoneRows.filter(r => r !== rowSelf);
                     onZoneChanged(); // update preview when zone removed
-                }, onZoneChanged);
+                }, onZoneChanged, getBounds());
                 zoneRows.push(row);
                 zonesGroup.add(row);
             }
@@ -1273,7 +1363,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                 zonesGroup.remove(rowSelf);
                 zoneRows = zoneRows.filter(r => r !== rowSelf);
                 onZoneChanged(); // update preview when zone removed
-            }, onZoneChanged);
+            }, onZoneChanged, getBounds());
             zoneRows.push(row);
             zonesGroup.add(row);
         });
@@ -1304,6 +1394,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                 return;
             }
 
+            const bounds = { resW, resH };
             for (let i = 0; i < numZones; i++) {
                 const zoneData = {
                     name: `Monitor ${monitorIndex} Zone ${i + 1}`,
@@ -1316,7 +1407,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
                     zonesGroup.remove(rowSelf);
                     zoneRows = zoneRows.filter(r => r !== rowSelf);
                     onZoneChanged();
-                }, onZoneChanged);
+                }, onZoneChanged, bounds);
                 zoneRows.push(row);
                 zonesGroup.add(row);
             }
@@ -1774,7 +1865,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
         });
     }
 
-    _addZoneRow(zoneOrNull, zonesGroup) {
+    _addZoneRow(zoneOrNull, zonesGroup, bounds) {
         const initial = zoneOrNull ?? {
             name: '',
             monitorIndex: 0,
@@ -1787,7 +1878,7 @@ export default class TabbedTilingPrefs extends ExtensionPreferences {
             // remove from UI and local list
             zonesGroup.remove(rowSelf);
             this._zoneRows = this._zoneRows.filter(r => r !== rowSelf);
-        });
+        }, null, bounds || { resW: 1920, resH: 1080 });
 
         this._zoneRows.push(row);
         zonesGroup.add(row);
