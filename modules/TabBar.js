@@ -198,12 +198,28 @@ export const TabBar = GObject.registerClass({
 
     removeTab(window) {
         try {
+            const title = (() => { try { return window.get_title(); } catch(e) { return '<destroyed>'; } })();
+            const wmClass = (() => { try { return window.get_wm_class(); } catch(e) { return '<unknown>'; } })();
+            log(`removeTab: Window "${title}" (wmClass=${wmClass}) - _tabs.has(window) = ${this._tabs.has(window)}`);
+            log(`removeTab: Current tabs in map: ${this._tabs.size}`);
+            
             if (this._tabs.has(window)) {
                 const tab = this._tabs.get(window);
+                log(`removeTab: Found tab, removing from container and destroying`);
                 this._tabContainer.remove_child(tab);
                 tab.destroy();
                 this._tabs.delete(window);
+                log(`removeTab: Deleted from map. New tab count: ${this._tabs.size}`);
                 this.reorderTabs();
+                log(`removeTab: reorderTabs completed`);
+            } else {
+                log(`removeTab: WARNING - Tab NOT found for window! This may indicate a bug.`);
+                // Debug: list all current tab windows
+                log(`removeTab: Current tabs in map:`);
+                this._tabs.forEach((t, w) => {
+                    const tTitle = (() => { try { return w.get_title(); } catch(e) { return '<destroyed>'; } })();
+                    log(`  - "${tTitle}"`);
+                });
             }
         } catch (e) {
             logError(e, 'TabbedTiling: Error in TabBar.removeTab');

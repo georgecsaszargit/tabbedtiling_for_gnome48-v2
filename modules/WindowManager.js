@@ -358,9 +358,14 @@ export class WindowManager {
             return;
         }
 
+        const title = (() => { try { return window.get_title(); } catch(e) { return '<unknown>'; } })();
+        const wmClass = (() => { try { return window.get_wm_class(); } catch(e) { return '<unknown>'; } })();
+        log(`_trackWindowState: Tracking window "${title}" (wmClass=${wmClass})`);
+
         // The 'actor' is the actual visual object on the screen. This is what we need to watch.
         const actor = window.get_compositor_private();
         if (!actor) {
+            log(`_trackWindowState: Cannot track window "${title}" - no compositor private (actor)`);
             return; // Cannot track if there is no actor
         }
 
@@ -382,6 +387,7 @@ export class WindowManager {
 
                     // Ensure the window wasn't destroyed while we were waiting.
                     if (!this._isWindowValid(window)) {
+                        log(`_trackWindowState: onAllocationChanged - window "${title}" is no longer valid`);
                         return GLib.SOURCE_REMOVE;
                     }
 
@@ -410,9 +416,13 @@ export class WindowManager {
         // Fix 1: Store {obj, id} pairs so each signal is disconnected from its correct source
         const signals = [
             { obj: actor, id: actor.connect('notify::allocation', onAllocationChanged) },
-            { obj: window, id: window.connect('unmanaged', () => this._untrackWindowState(window)) }
+            { obj: window, id: window.connect('unmanaged', () => {
+                log(`_trackWindowState: 'unmanaged' signal fired for window "${title}"`);
+                return this._onWindowUnmanaged(window);
+            }) }
         ];
         this._windowStateSignals.set(window, signals);
+        log(`_trackWindowState: Connected 'unmanaged' signal for window "${title}" (signal id=${signals[1].id})`);
     }
 
     // Fix 1: Disconnect each signal from its correct source object
@@ -424,6 +434,46 @@ export class WindowManager {
             });
             this._windowStateSignals.delete(window);
         }
+    }
+
+    // Called when a window is closed/unmanaged. Remove it from its zone and clean up.
+    _onWindowUnmanaged(window) {
+        try {
+            const title = (() => { try { return window.get_title(); } catch(e) { return '<destroyed>'; } })();
+            const wmClass = (() => { try { return window.get_wm_class(); } catch(e) { return '<unknown>'; } })();
+            log(`_onWindowUnmanaged: Window "${title}" (wmClass=${wmClass}) received 'unmanaged' signal`);
+            
+            if (!window || this._isDisabled) {
+                log(`_onWindowUnmanaged: Skipping - window=${!!window}, _isDisabled=${this._isDisabled}`);
+                return;
+            }
+            
+            // Check if window is already invalid
+            const isValid = this._isWindowValid(window);
+            log(`_onWindowUnmanaged: Window validity check: ${isValid}`);
+            
+            // Remove from zone before untracking so the tab is removed from the tab bar
+            const zone = this._findZoneForWindow(window);
+            if (zone) {
+                const title = (() => { try { return window.get_title(); } catch(e) { return '<destroyed>'; } })();
+                log(`_onWindowUnmanaged: Found zone "${zone.name}" for window "${title}", calling unsnapWindow`);
+                log(`_onWindowUnmanaged: Zone has ${zone._snappedWindows.size} snapped windows before unsnap`);
+                zone.unsnapWindow(window);
+                log(`_onWindowUnmanaged: Zone has ${zone._snappedWindows.size} snapped windows after unsnap`);
+            } else {
+                log(`_onWindowUnmanaged: WARNING - No zone found for window "${title}" (wmClass=${wmClass})`);
+                // Debug: list all zones and their windows
+                log(`_onWindowUnmanaged: All zones state:`);
+                this._zones.forEach(z => {
+                    const tabCount = z._tabBar ? z._tabBar._tabs.size : 0;
+                    log(`  - Zone "${z.name}" (monitor=${z.monitorIndex}): ${z._snappedWindows.size} snapped, ${tabCount} tabs`);
+                });
+            }
+        } catch (e) {
+            logError(e, 'TabbedTiling: Error in _onWindowUnmanaged');
+        }
+        // Always disconnect signals and remove from tracking
+        this._untrackWindowState(window);
     }
 
     // Fix 1: Disconnect all tracked window state signals from correct source objects
@@ -672,27 +722,29 @@ export class WindowManager {
         try {
             const currentWindows = new Set(global.get_window_actors().map(a => a.get_meta_window()));
             const previouslyTracked = new Set(this._windowStateSignals.keys());
+            log(`_onTrackedWindowsChanged: currentWindows=${currentWindows.size}, previouslyTracked=${previouslyTracked.size}`);
 
             // Untrack closed windows and remove them from zones
             for (const window of previouslyTracked) {
                 if (!currentWindows.has(window)) {
+                    const title = (() => { try { return window.get_title(); } catch(e) { return '<destroyed>'; } })();
+                    const wmClass = (() => { try { return window.get_wm_class(); } catch(e) { return '<unknown>'; } })();
+                    log(`_onTrackedWindowsChanged: Window "${title}" (wmClass=${wmClass}) is no longer in currentWindows`);
+                    
+                    // Find the zone BEFORE untracking, so we can remove the tab
+                    const zone = this._findZoneForWindow(window);
+                    if (zone) {
+                        log(`_onTrackedWindowsChanged: Found zone "${zone.name}" for window "${title}", calling unsnapWindow`);
+                        // Call unsnapWindow regardless of window validity - it handles destroyed windows
+                        zone.unsnapWindow(window);
+                    } else {
+                        log(`_onTrackedWindowsChanged: WARNING - No zone found for window "${title}" (wmClass=${wmClass})`);
+                    }
+                    
                     try {
                         this._untrackWindowState(window);
                     } catch (e) {
                         logError(e, 'TabbedTiling: Error untracking window state');
-                    }
-                    try {
-                        if (this._isWindowValid(window)) {
-                            const zone = this._findZoneForWindow(window);
-                            if (zone) {
-                                // Fix 6: Safe window title access
-                                const title = (() => { try { return window.get_title(); } catch(e) { return '<destroyed>'; } })();
-                                log(`Window "${title}" is no longer tracked, removing from zone "${zone.name}".`);
-                                zone.unsnapWindow(window);
-                            }
-                        }
-                    } catch (e) {
-                        logError(e, 'TabbedTiling: Error removing window from zone');
                     }
                 }
             }
@@ -734,25 +786,46 @@ export class WindowManager {
     }
 
     _snapExistingWindows() {
+        log(`_snapExistingWindows: Starting, zones=${this._zones.length}`);
         const allWindows = global.get_window_actors().map(a => a.get_meta_window());
+        log(`_snapExistingWindows: Found ${allWindows.length} windows`);
+        
+        let snappedCount = 0;
         allWindows.forEach(window => {
             try {
+                const title = (() => { try { return window.get_title(); } catch(e) { return '<unknown>'; } })();
+                const wmClass = (() => { try { return window.get_wm_class(); } catch(e) { return '<unknown>'; } })();
+                log(`_snapExistingWindows: Processing window "${title}" (wmClass=${wmClass})`);
+                
                 this._trackWindowState(window);
-                if (this._isSnappable(window)) {
+                
+                const isSnappable = this._isSnappable(window);
+                log(`_snapExistingWindows: window "${title}" isSnappable=${isSnappable}`);
+                
+                if (isSnappable) {
                     let targetZone = this._findZoneForWindow(window);
+                    log(`_snapExistingWindows: window "${title}" _findZoneForWindow returned ${targetZone ? targetZone.name : 'null'}`);
 
                     if (!targetZone) {
                         targetZone = this._findBestZoneForWindow(window);
+                        log(`_snapExistingWindows: window "${title}" _findBestZoneForWindow returned ${targetZone ? targetZone.name : 'null'}`);
                     }
 
                     if (targetZone) {
+                        log(`_snapExistingWindows: Snapping window "${title}" to zone "${targetZone.name}"`);
                         targetZone.snapWindow(window);
+                        snappedCount++;
+                    } else {
+                        log(`_snapExistingWindows: WARNING - No target zone for window "${title}"`);
                     }
                 }
             } catch (e) {
                 // Window may have been destroyed, skip it
+                logError(e, 'TabbedTiling: Error in _snapExistingWindows');
             }
         });
+        
+        log(`_snapExistingWindows: Completed, snapped ${snappedCount}/${allWindows.length} windows`);
         this._updateAllZonesVisibility();
         this._zones.forEach(zone => zone.reorderTabs());
     }

@@ -14,7 +14,7 @@ const log = msg => console.log(`[TabbedTiling.Zone] ${msg}`);
 const SAFE_ZONE_PROPS = [
     'x', 'y', 'width', 'height',
     'monitorIndex', 'splitDirection', 'splitRatio',
-    'childZones', 'layer', 'name', 'gaps', 'gap',
+    'childZones', 'layer', 'name', 'gaps', 'gap', 'isPrimary',
 ];
 
 export class Zone {
@@ -357,12 +357,20 @@ export class Zone {
     // Fix 9: Wrap unsnapWindow in try-catch
     unsnapWindow(window) {
         try {
+            const title = (() => { try { return window.get_title(); } catch(e) { return '<destroyed>'; } })();
+            const wmClass = (() => { try { return window.get_wm_class(); } catch(e) { return '<unknown>'; } })();
+            log(`unsnapWindow: Window "${title}" (wmClass=${wmClass}) called on zone "${this.name}"`);
+            log(`unsnapWindow: window.get_compositor_private() = ${!!window.get_compositor_private()}, _snappedWindows.has(window) = ${this._snappedWindows.has(window)}`);
+            
             if (!window || !window.get_compositor_private()) {
+                log(`unsnapWindow: Window actor invalid. _snappedWindows.has(window) = ${this._snappedWindows.has(window)}`);
                 // Window already destroyed — just clean up bookkeeping
                 if (window && this._snappedWindows.has(window)) {
+                    log(`unsnapWindow: Cleaning up stale reference for destroyed window`);
                     this._snappedWindows.delete(window);
                     delete window._tilingZoneId;
                     delete window._tilingZone;
+                    log(`unsnapWindow: Calling _tabBar.removeTab for destroyed window`);
                     this._tabBar.removeTab(window);
                     this._history = this._history.filter(w => w && w !== window && this._snappedWindows.has(w));
                     if (this._activeWindow === window) this._activeWindow = null;
@@ -372,10 +380,13 @@ export class Zone {
             }
             const wasActive = (this._activeWindow === window);
             if (this._snappedWindows.has(window)) {
+                log(`unsnapWindow: Removing window from _snappedWindows and calling _tabBar.removeTab`);
                 this._snappedWindows.delete(window);
                 delete window._tilingZoneId;
                 delete window._tilingZone;
+                log(`unsnapWindow: Calling _tabBar.removeTab`);
                 this._tabBar.removeTab(window);
+                log(`unsnapWindow: _tabBar._tabs.size after removeTab = ${this._tabBar._tabs.size}`);
 
                 // Remove from MRU history (and prune any stale refs while we're here)
                 this._history = this._history.filter(w => w && w !== window && this._snappedWindows.has(w));
